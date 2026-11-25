@@ -23,7 +23,7 @@ from django.conf import settings
 from django.utils import timezone
 
 DB_NAME = "taskchampion.sqlite3"
-LIMIT = 8
+DAYS_AHEAD = 1  # Standard: überfällig, heute und morgen fällig
 POLL_SECONDS = 300
 TIMEOUT = 10
 # Beim Start aus launchd oder dem Finder fehlt Homebrew oft im PATH
@@ -241,11 +241,12 @@ def _days(n):
     return "1 Tag" if n == 1 else f"{n} Tagen"
 
 
-def build_item(task, today):
-    kind, label = "ok", ""
+def build_item(task, today, days_ahead=DAYS_AHEAD):
+    kind, label, soon = "ok", "", False
     if task["due"]:
         due_day = timezone.localtime(task["due"]).date()
         delta = (due_day - today).days
+        soon = delta <= days_ahead
         if delta < 0:
             kind, label = "over", f"überfällig seit {_days(-delta)}"
         elif delta == 0:
@@ -264,6 +265,7 @@ def build_item(task, today):
         "name": task["description"],
         "kind": kind,
         "label": label,
+        "soon": soon,
         "meta": " · ".join(meta),
         "priority": task["priority"],
         "priority_label": PRIORITY_LABELS.get(task["priority"], ""),
@@ -280,8 +282,8 @@ def get_tile(show_all=False, now=None):
     today = timezone.localtime(now).date()
     tile = {
         "status": "unknown", "status_label": STATUS_LABELS["unknown"], "summary": "", "error": None,
-        "missing": False, "source": "", "items": [], "count_all": 0, "show_all": show_all,
-        "has_more": False, "poll_seconds": _setting("TASKS_POLL_SECONDS", POLL_SECONDS),
+        "missing": False, "source": "", "items": [], "count_all": 0, "count_soon": 0, "show_all": show_all,
+        "days_ahead": _setting("TASKS_DAYS_AHEAD", DAYS_AHEAD), "poll_seconds": _setting("TASKS_POLL_SECONDS", POLL_SECONDS),
     }
     try:
         tasks, source = load(now)
@@ -294,17 +296,23 @@ def get_tile(show_all=False, now=None):
 
     visible = [t for t in tasks if not (t["wait"] and t["wait"] > now)]  # wartende Tasks blendet task auch aus
     visible.sort(key=lambda t: (-t["urgency"], t["due"] or datetime.max.replace(tzinfo=dt_timezone.utc), t["description"]))
-    items = [build_item(task, today) for task in visible]
+    items = [build_item(task, today, tile["days_ahead"]) for task in visible]
+    soon = [i for i in items if i["soon"]]
     status = ("red" if any(i["kind"] == "over" for i in items)
               else "amber" if any(i["kind"] == "due" for i in items) else "green")
-    limit = _setting("TASKS_LIMIT", LIMIT)
+    if not items:
+        summary = "nichts offen"
+    elif soon:
+        summary = f"{len(soon)} fällig · {len(items)} offen"
+    else:
+        summary = f"{len(items)} offen"
     tile.update(
         status=status,
         status_label=STATUS_LABELS[status],
-        summary=f"{len(items)} offen" if items else "nichts offen",
+        summary=summary,
         source=source,
-        items=items if show_all else items[:limit],
+        items=items if show_all else soon,  # standardmäßig nur, was bis morgen fällig ist
         count_all=len(items),
-        has_more=len(items) > limit,
+        count_soon=len(soon),
     )
     return tile

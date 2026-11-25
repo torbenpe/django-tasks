@@ -1,6 +1,6 @@
 [project]
 name = "django-tasks"
-version = "0.1.0"
+version = "0.2.0"
 description = "Django-Kachel, die die offenen Tasks des lokalen Taskwarrior anzeigt"
 readme = "README.md"
 requires-python = ">=3.12"

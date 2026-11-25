@@ -27,6 +27,8 @@ CLI_EXPORT = [
      "status": "pending", "start": "20261125T080000Z", "urgency": 14.0},
     {"id": 4, "uuid": "d", "description": "Wartet noch", "wait": "20261201T000000Z", "entry": "20261120T090000Z",
      "status": "pending", "urgency": 9.0},
+    {"id": 6, "uuid": "f", "description": "Morgen", "due": "20261126T100000Z", "entry": "20261120T090000Z",
+     "status": "pending", "urgency": 8.5},
     {"id": 5, "uuid": "e", "description": "Nächste Woche", "due": "20261201T230000Z", "entry": "20261120T090000Z",
      "status": "pending", "urgency": 8.0},
 ]
@@ -71,15 +73,16 @@ class Sandbox(SimpleTestCase):
 class CliTests(Sandbox):
     def test_order_states_and_labels(self):
         self.fake_task(json.dumps(CLI_EXPORT))
-        tile = core.get_tile(now=NOW)
+        tile = core.get_tile(show_all=True, now=NOW)
         self.assertEqual(tile["source"], "task export")
         self.assertEqual(tile["status"], "red")
-        self.assertEqual(tile["summary"], "4 offen")
-        self.assertEqual([(i["id"], i["kind"], i["label"]) for i in tile["items"]], [
-            (2, "over", "überfällig seit 4 Tagen"),
-            (3, "due", "heute fällig"),
-            (5, "ok", "fällig Mi, 2. Dez"),
-            (1, "ok", ""),
+        self.assertEqual(tile["summary"], "3 fällig · 5 offen")
+        self.assertEqual([(i["id"], i["kind"], i["label"], i["soon"]) for i in tile["items"]], [
+            (2, "over", "überfällig seit 4 Tagen", True),
+            (3, "due", "heute fällig", True),
+            (6, "ok", "morgen fällig", True),
+            (5, "ok", "fällig Mi, 2. Dez", False),
+            (1, "ok", "", False),
         ])
         over = tile["items"][0]
         self.assertEqual((over["meta"], over["priority_label"]), ("projekt-a · +buero · +kunde", "hoch"))
@@ -107,12 +110,24 @@ class CliTests(Sandbox):
         self.fake_task("das ist kein json")
         self.assertEqual(core.get_tile(now=NOW)["error"], "task export liefert kein JSON")
 
-    @override_settings(TASKS_LIMIT=2)
-    def test_limit_and_show_all(self):
+    def test_default_shows_only_due_until_tomorrow(self):
         self.fake_task(json.dumps(CLI_EXPORT))
         tile = core.get_tile(now=NOW)
-        self.assertEqual((len(tile["items"]), tile["count_all"], tile["has_more"]), (2, 4, True))
-        self.assertEqual(len(core.get_tile(show_all=True, now=NOW)["items"]), 4)
+        self.assertEqual([i["id"] for i in tile["items"]], [2, 3, 6])
+        self.assertEqual((tile["count_soon"], tile["count_all"]), (3, 5))
+
+    @override_settings(TASKS_DAYS_AHEAD=0)
+    def test_days_ahead_setting(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        self.assertEqual([i["id"] for i in core.get_tile(now=NOW)["items"]], [2, 3])
+
+    def test_nothing_due_but_open_tasks(self):
+        self.fake_task(json.dumps([CLI_EXPORT[0]]))
+        tile = core.get_tile(now=NOW)
+        self.assertEqual((tile["items"], tile["summary"], tile["status"]), ([], "1 offen", "green"))
+        response = self.client.get(reverse("tasks:tile"))
+        self.assertContains(response, "Nichts fällig bis morgen.")
+        self.assertContains(response, "Alle (1)")
 
     def test_cli_wins_over_db(self):
         self.fake_task(json.dumps(CLI_EXPORT))
@@ -136,7 +151,7 @@ class DbTests(Sandbox):
 
     def test_reads_pending_and_skips_waiting(self):
         self.sample()
-        tile = core.get_tile(now=NOW)
+        tile = core.get_tile(show_all=True, now=NOW)
         self.assertEqual(tile["source"], core.DB_NAME)
         self.assertEqual([(i["id"], i["name"]) for i in tile["items"]], [(2, "Überfällig"), (1, "Ohne alles"), (4, "Blockiert")])
         self.assertEqual(tile["items"][0]["meta"], "projekt-a · +kunde")
@@ -198,6 +213,9 @@ class ViewTests(Sandbox):
         self.assertContains(response, 'data-collapse="tasks"')
         self.assertContains(response, 'hx-trigger="every 300s"')
         self.assertNotContains(response, "Wartet noch")
+        self.assertNotContains(response, "Nächste Woche")  # erst unter „Alle“
+        self.assertContains(response, "Alle (5)")
+        self.assertContains(self.client.get(reverse("tasks:tile"), {"all": "1"}), "Nächste Woche")
 
     def test_post_not_allowed(self):
         self.assertEqual(self.client.post(reverse("tasks:tile")).status_code, 405)

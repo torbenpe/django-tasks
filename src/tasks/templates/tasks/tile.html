@@ -46,14 +46,17 @@
       {% endfor %}
     </ul>
 
+  {% elif tile.count_all %}
+    <p class="tk-empty">Nichts fällig bis {% if tile.days_ahead == 0 %}heute{% elif tile.days_ahead == 1 %}morgen{% else %}in {{ tile.days_ahead }} Tagen{% endif %}.</p>
   {% else %}
     <p class="tk-empty">Keine offenen Tasks.</p>
   {% endif %}
 
     <footer class="tk-foot">
-      {% if tile.has_more %}
+      {# Standard: nur Fälliges; „Alle“ zeigt jeden offenen Task #}
+      {% if tile.count_all > tile.count_soon %}
         <button type="button" class="tk-more" hx-get="{{ tile_url }}{% if not tile.show_all %}?all=1{% endif %}"
-                hx-target="closest .tk-tile" hx-swap="outerHTML">{% if tile.show_all %}Nur die ersten{% else %}Alle ({{ tile.count_all }}){% endif %}</button>
+                hx-target="closest .tk-tile" hx-swap="outerHTML">{% if tile.show_all %}Nur fällige{% else %}Alle ({{ tile.count_all }}){% endif %}</button>
       {% else %}
         <span>{{ tile.source|default:"Taskwarrior" }}</span>
       {% endif %}

@@ -2,7 +2,8 @@
 
 Django-App mit einer Kachel, die die offenen Tasks des lokal installierten
 [Taskwarrior](https://taskwarrior.org) (Version 3) anzeigt – sortiert nach Urgency, mit Projekt, Tags,
-Priorität und Fälligkeit. Vorerst nur lesend; Abhaken aus der Kachel heraus kommt später.
+Priorität und Fälligkeit. Standardmäßig nur, was überfällig, heute oder morgen fällig ist; „Alle (N)“
+zeigt jeden offenen Task. Vorerst nur lesend; Abhaken aus der Kachel heraus kommt später.
 
 Ist auf dem Mac kein Taskwarrior zu finden, zeigt die Kachel einen Hinweis statt eines Fehlers.
 
@@ -26,7 +27,7 @@ Wartende Tasks (`wait` in der Zukunft) blendet die Kachel aus, wie `task next`.
 
 ```toml
 # pyproject.toml – Version festnageln; das Archiv braucht kein git im Docker-Image
-dependencies = ["django-tasks @ https://github.com/torbenpe/django-tasks/archive/refs/tags/v0.1.0.tar.gz"]
+dependencies = ["django-tasks @ https://github.com/torbenpe/django-tasks/archive/refs/tags/v0.2.0.tar.gz"]
 ```
 
 ```python
@@ -72,7 +73,7 @@ Den Ordner einbinden, nicht nur die Datei: SQLite braucht die Nebendateien (`-wa
 | `TASKS_SOURCE` | `"auto"` | `"cli"` nur `task export`, `"db"` nur die Datenbank |
 | `TASKS_COMMAND` | `"task"` | Programmname oder absoluter Pfad |
 | `TASKS_DATA_DIR` | `~/.task` | Ordner mit `taskchampion.sqlite3` |
-| `TASKS_LIMIT` | `8` | so viele Tasks, der Rest hinter „Alle (N)“ |
+| `TASKS_DAYS_AHEAD` | `1` | standardmäßig gezeigt: fällig bis heute + so viele Tage (0 = nur bis heute) |
 | `TASKS_POLL_SECONDS` | `300` | Abstand, in dem sich die Kachel neu lädt |
 | `TASKS_TIMEOUT` | `10` | Sekunden, die `task export` höchstens braucht |
 
@@ -82,6 +83,7 @@ Die Kachel hat keinen Zugriffsschutz; den muss das Projekt mitbringen.
 ## Kachel
 
 - Statuspunkt: rot, wenn etwas überfällig ist; gelb, wenn etwas heute fällig ist; sonst grün. Grau ohne Daten.
+- Kopf: „3 fällig · 13 offen“. Ist nichts fällig: „Nichts fällig bis morgen.“ und darunter „Alle (N)“.
 - Je Task: ID, Beschreibung (höchstens zwei Zeilen), Priorität, „läuft“ bei gestarteten Tasks,
   Projekt und Tags, Fälligkeit („überfällig seit 2 Tagen“, „heute fällig“, „fällig Mi, 2. Dez“).
 
