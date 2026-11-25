@@ -1,5 +1,6 @@
 SECRET_KEY = "tests-only"
 INSTALLED_APPS = ["django.contrib.staticfiles", "tasks"]
+MIDDLEWARE = ["django.middleware.csrf.CsrfViewMiddleware"]
 ROOT_URLCONF = "tests.urls"
 TEMPLATES = [{
     "BACKEND": "django.template.backends.django.DjangoTemplates",

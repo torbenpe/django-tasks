@@ -1,36 +1,39 @@
-"""Offene Tasks des lokalen Taskwarrior (Version 3) als Kachel – vorerst nur lesend.
+"""Offene Tasks des lokalen Taskwarrior (Version 3) als Kachel, mit Snooze.
 
-Zwei Wege an die Daten, in dieser Reihenfolge (`TASKS_SOURCE = "auto"`):
+Drei Wege an die Daten, in dieser Reihenfolge (`TASKS_SOURCE = "auto"`):
 
 1. `task export` – wenn das Programm hier läuft (Django direkt auf dem Mac). Genau wie im Terminal,
-   samt Urgency aus der eigenen `.taskrc`.
-2. `taskchampion.sqlite3` lesen – für Django im Linux-Container, in dem das Mac-Programm nicht läuft.
-   Dafür `~/.task` schreibgeschützt einbinden und `TASKS_DATA_DIR` setzen. Die Urgency wird mit den
-   Standardgewichten von Taskwarrior nachgerechnet (eigene `urgency.*`-Werte aus der `.taskrc` fehlen).
+   samt Urgency aus der eigenen `.taskrc`. Snooze ruft `task … modify` direkt auf.
+2. Die Tasks-Brücke (`tasks.bridge`) – für Django im Linux-Container, in dem das Mac-Programm nicht
+   läuft. Sie läuft auf dem Mac und ruft dort `task` auf; Ergebnis wie unter 1, Snooze inklusive.
+   Gesetzt über `TASKS_BRIDGE_URL` und `TASKS_BRIDGE_KEY_FILE`.
+3. `taskchampion.sqlite3` lesen – Notbehelf im Container, wenn die Brücke fehlt oder nicht antwortet.
+   Nur lesend; die Urgency wird mit den Standardgewichten von Taskwarrior nachgerechnet.
 
-Findet sich keins von beiden, zeigt die Kachel einen Hinweis statt eines Fehlers.
+Findet sich nichts davon, zeigt die Kachel einen Hinweis statt eines Fehlers.
 """
 
 import json
-import os
-import shutil
 import sqlite3
-import subprocess
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 
 from django.conf import settings
 from django.utils import timezone
 
+from . import taskwarrior
+
 DB_NAME = "taskchampion.sqlite3"
 DAYS_AHEAD = 1  # Standard: überfällig, heute und morgen fällig
+SNOOZE_DAYS = 7
 POLL_SECONDS = 300
 TIMEOUT = 10
-# Beim Start aus launchd oder dem Finder fehlt Homebrew oft im PATH
-EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin")
 WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 MONTHS = ("Jan", "Feb", "März", "Apr", "Mai", "Juni", "Juli", "Aug", "Sept", "Okt", "Nov", "Dez")
 PRIORITY_LABELS = {"H": "hoch", "M": "mittel", "L": "niedrig"}
+SOURCE_CLI, SOURCE_BRIDGE = "task export", "Tasks-Brücke"
 
 
 class SourceError(Exception):
@@ -38,7 +41,11 @@ class SourceError(Exception):
 
 
 class NotInstalled(Exception):
-    """Weder das Programm `task` noch eine Datenbank gefunden."""
+    """Weder das Programm `task` noch die Brücke noch eine Datenbank gefunden."""
+
+
+class ReadOnly(Exception):
+    """Ändern geht nicht: weder `task` hier noch eine Brücke eingerichtet."""
 
 
 def _setting(name, default):
@@ -48,11 +55,7 @@ def _setting(name, default):
 # --- Quellen ---------------------------------------------------------------------------------------
 
 def find_command():
-    command = _setting("TASKS_COMMAND", "task")
-    if os.sep in command:
-        return command if os.access(command, os.X_OK) else None
-    search = os.pathsep.join([os.environ.get("PATH", ""), *EXTRA_PATH])
-    return shutil.which(command, path=search)
+    return taskwarrior.find_command(_setting("TASKS_COMMAND", "task"))
 
 
 def data_dir():
@@ -62,35 +65,55 @@ def data_dir():
 
 def export_cli(command):
     """Alle Tasks mit Status pending über `task export`."""
-    args = [
-        command,
-        "rc.confirmation=off", "rc.verbose=nothing", "rc.hooks=off", "rc.gc=off", "rc.json.array=on",
-        "status:pending", "export",
-    ]
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=_setting("TASKS_TIMEOUT", TIMEOUT),
-                                stdin=subprocess.DEVNULL, check=False)
-    except subprocess.TimeoutExpired:
-        raise SourceError("task export antwortet nicht") from None
-    except OSError as exc:
-        raise SourceError(f"task nicht startbar ({exc.strerror})") from None
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip().splitlines()
-        raise SourceError(f"task export fehlgeschlagen: {detail[0] if detail else f'Exit {result.returncode}'}")
-    try:
-        raw = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError:
-        raise SourceError("task export liefert kein JSON") from None
-    return [_from_cli(entry) for entry in raw if isinstance(entry, dict)]
+        raw = taskwarrior.export(command, timeout=_setting("TASKS_TIMEOUT", TIMEOUT))
+    except taskwarrior.TaskError as exc:
+        raise SourceError(str(exc)) from None
+    return [_from_cli(entry) for entry in raw]
 
 
-def _parse_cli_date(value):
-    if not value:
+# --- Brücke ----------------------------------------------------------------------------------------
+
+def bridge_config():
+    """(URL, Schlüssel) oder None, wenn keine Brücke eingerichtet ist. Fehlt nur der Schlüssel: Fehler."""
+    url = _setting("TASKS_BRIDGE_URL", None)
+    if not url:
         return None
+    key_file = _setting("TASKS_BRIDGE_KEY_FILE", None)
     try:
-        return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt_timezone.utc)
+        key = Path(key_file).read_text(encoding="utf-8").strip() if key_file else ""
+    except OSError:
+        key = ""
+    if not key:
+        raise SourceError("Schlüssel der Tasks-Brücke fehlt (TASKS_BRIDGE_KEY_FILE) – läuft die Brücke schon?")
+    return url.rstrip("/"), key
+
+
+def _bridge(config, method, path, payload=None):
+    url, key = config
+    data = json.dumps(payload).encode() if payload is not None else None
+    request = urllib.request.Request(f"{url}{path}", data=data, method=method, headers={
+        "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=_setting("TASKS_TIMEOUT", TIMEOUT)) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        try:
+            message = json.loads(exc.read()).get("error")
+        except (ValueError, AttributeError):
+            message = None
+        raise SourceError(f"Tasks-Brücke: {message or f'HTTP {exc.code}'}") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise ConnectionError("Tasks-Brücke nicht erreichbar") from None
     except ValueError:
-        return None
+        raise SourceError("Tasks-Brücke liefert kein JSON") from None
+
+
+def export_bridge(config):
+    tasks = _bridge(config, "GET", "/tasks").get("tasks")
+    if not isinstance(tasks, list):
+        raise SourceError("Tasks-Brücke liefert keine Liste")
+    return [_from_cli(entry) for entry in tasks if isinstance(entry, dict)]
 
 
 def _from_cli(entry):
@@ -101,9 +124,9 @@ def _from_cli(entry):
         "project": entry.get("project", ""),
         "tags": sorted(entry.get("tags") or []),
         "priority": entry.get("priority", ""),
-        "due": _parse_cli_date(entry.get("due")),
-        "wait": _parse_cli_date(entry.get("wait")),
-        "entry": _parse_cli_date(entry.get("entry")),
+        "due": taskwarrior.parse_date(entry.get("due")),
+        "wait": taskwarrior.parse_date(entry.get("wait")),
+        "entry": taskwarrior.parse_date(entry.get("entry")),
         "active": bool(entry.get("start")),
         "annotations": len(entry.get("annotations") or []),
         "depends": list(entry.get("depends") or []),
@@ -214,21 +237,63 @@ def urgency(task, now, blocked=False, blocking=False):
 
 
 def load(now=None):
-    """(Tasks, Quelle). Wirft NotInstalled oder SourceError."""
+    """(Tasks, Quelle, Hinweis). Wirft NotInstalled oder SourceError."""
     now = now or timezone.now()
     source = _setting("TASKS_SOURCE", "auto")
-    if source not in ("auto", "cli", "db"):
-        raise SourceError(f"TASKS_SOURCE muss auto, cli oder db sein, nicht „{source}“")
+    if source not in ("auto", "cli", "bridge", "db"):
+        raise SourceError(f"TASKS_SOURCE muss auto, cli, bridge oder db sein, nicht „{source}“")
     if source in ("auto", "cli"):
         command = find_command()
         if command:
-            return export_cli(command), "task export"
+            return export_cli(command), SOURCE_CLI, ""
         if source == "cli":
             raise NotInstalled
+    note = ""
+    if source in ("auto", "bridge"):
+        config = bridge_config()
+        if config:
+            try:
+                return export_bridge(config), SOURCE_BRIDGE, ""
+            except ConnectionError as exc:
+                if source == "bridge":
+                    raise SourceError(str(exc)) from None
+                note = f"{exc} – nur lesend"
+        elif source == "bridge":
+            raise SourceError("TASKS_BRIDGE_URL ist nicht gesetzt")
     db = data_dir() / DB_NAME
-    if db.is_file():
-        return export_db(db, now), DB_NAME
+    if source in ("auto", "db") and db.is_file():
+        return export_db(db, now), DB_NAME, note
+    if note:
+        raise SourceError(note.removesuffix(" – nur lesend"))
     raise NotInstalled
+
+
+def snooze_task(uuid, days=None):
+    """Fälligkeit um `days` (Standard TASKS_SNOOZE_DAYS) verschieben – ab dem späteren von Fälligkeit
+    und heute. Über `task` hier, sonst über die Brücke. Wirft ReadOnly oder SourceError."""
+    days = days or _setting("TASKS_SNOOZE_DAYS", SNOOZE_DAYS)
+    source = _setting("TASKS_SOURCE", "auto")
+    if source in ("auto", "cli"):
+        command = find_command()
+        if command:
+            try:
+                return taskwarrior.snooze(command, uuid, days, timezone.localtime(),
+                                          timeout=_setting("TASKS_TIMEOUT", TIMEOUT))
+            except taskwarrior.TaskError as exc:
+                raise SourceError(str(exc)) from None
+    if source in ("auto", "bridge"):
+        config = bridge_config()
+        if config:
+            try:
+                answer = _bridge(config, "POST", f"/tasks/{uuid}/snooze", {"days": days})
+            except ConnectionError as exc:
+                raise SourceError(str(exc)) from None
+            return taskwarrior.parse_date(answer.get("due"))
+    raise ReadOnly
+
+
+def can_write(source):
+    return source in (SOURCE_CLI, SOURCE_BRIDGE)
 
 
 # --- Kachel ----------------------------------------------------------------------------------------
@@ -266,6 +331,7 @@ def build_item(task, today, days_ahead=DAYS_AHEAD):
         "kind": kind,
         "label": label,
         "soon": soon,
+        "has_due": task["due"] is not None,
         "meta": " · ".join(meta),
         "priority": task["priority"],
         "priority_label": PRIORITY_LABELS.get(task["priority"], ""),
@@ -277,16 +343,17 @@ def build_item(task, today, days_ahead=DAYS_AHEAD):
 STATUS_LABELS = {"red": "überfällig", "amber": "heute fällig", "green": "nichts fällig", "unknown": "keine Daten"}
 
 
-def get_tile(show_all=False, now=None):
+def get_tile(show_all=False, now=None, flash=""):
     now = now or timezone.now()
     today = timezone.localtime(now).date()
     tile = {
         "status": "unknown", "status_label": STATUS_LABELS["unknown"], "summary": "", "error": None,
         "missing": False, "source": "", "items": [], "count_all": 0, "count_soon": 0, "show_all": show_all,
-        "days_ahead": _setting("TASKS_DAYS_AHEAD", DAYS_AHEAD), "poll_seconds": _setting("TASKS_POLL_SECONDS", POLL_SECONDS),
+        "days_ahead": _setting("TASKS_DAYS_AHEAD", DAYS_AHEAD), "can_write": False, "note": "", "flash": flash,
+        "snooze_days": _setting("TASKS_SNOOZE_DAYS", SNOOZE_DAYS), "poll_seconds": _setting("TASKS_POLL_SECONDS", POLL_SECONDS),
     }
     try:
-        tasks, source = load(now)
+        tasks, source, note = load(now)
     except NotInstalled:
         tile.update(missing=True, status_label="Taskwarrior fehlt", summary="nicht gefunden")
         return tile
@@ -311,6 +378,8 @@ def get_tile(show_all=False, now=None):
         status_label=STATUS_LABELS[status],
         summary=summary,
         source=source,
+        note=note,
+        can_write=can_write(source),
         items=items if show_all else soon,  # standardmäßig nur, was bis morgen fällig ist
         count_all=len(items),
         count_soon=len(soon),

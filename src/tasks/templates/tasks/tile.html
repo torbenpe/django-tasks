@@ -26,6 +26,10 @@
   {% elif tile.error %}
     <p class="tk-error">{{ tile.error }}</p>
 
+  {% endif %}
+  {% if tile.flash %}<p class="tk-flash" role="status">{{ tile.flash }}</p>{% endif %}
+  {% if tile.note %}<p class="tk-note">{{ tile.note }}</p>{% endif %}
+  {% if tile.missing or tile.error %}
   {% elif tile.items %}
     <ul class="tk-list">
       {% for item in tile.items %}
@@ -42,6 +46,18 @@
               </div>
             {% endif %}
           </div>
+          {% if tile.can_write and item.has_due %}
+            <form method="post" action="{% url 'tasks:snooze' item.uuid %}"
+                  hx-post="{% url 'tasks:snooze' item.uuid %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+              {% csrf_token %}
+              {% if tile.show_all %}<input type="hidden" name="all" value="1">{% endif %}
+              <button type="submit" class="tk-snooze" aria-label="{{ item.name }} um {{ tile.snooze_days }} Tage verschieben"
+                      title="Fälligkeit um {{ tile.snooze_days }} Tage verschieben">
+                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2"></path><path d="M5 3L2 6M19 3l3 3"></path></svg>
+                <span>+{{ tile.snooze_days }}</span>
+              </button>
+            </form>
+          {% endif %}
         </li>
       {% endfor %}
     </ul>

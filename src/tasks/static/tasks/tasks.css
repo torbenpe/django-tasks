@@ -80,6 +80,27 @@
 .tk-prio.is-m { color: var(--tk-amber-text); }
 .tk-active { color: var(--tk-green); }
 
+/* Snooze: Fälligkeit um N Tage verschieben – rechts in der Zeile, Trefferfläche ~44 px */
+.tk-item form { display: flex; flex-shrink: 0; margin: 0; align-self: center; }
+.tk-snooze {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--tk-bg);
+  color: var(--tk-muted);
+  border: 1px solid var(--tk-border);
+  border-radius: 14px;
+  font: 600 11px 'IBM Plex Sans', system-ui, sans-serif;
+  cursor: pointer;
+}
+.tk-snooze:hover { color: var(--tk-text); border-color: var(--tk-muted); }
+.tk-snooze::after { content: ""; position: absolute; inset: -8px -4px; }
+.tk-flash, .tk-note { margin: 0; padding: 4px 0; border-top: 1px solid var(--tk-line); font-size: 12px; line-height: 18px; color: var(--tk-muted); }
+.tk-flash { color: var(--tk-text); }
+
 .tk-empty, .tk-error { margin: 0; padding: 4px 0; border-top: 1px solid var(--tk-line); font-size: 13px; line-height: 20px; }
 .tk-empty { color: var(--tk-muted); }
 .tk-error { font-size: 12px; line-height: 18px; color: var(--tk-red); }

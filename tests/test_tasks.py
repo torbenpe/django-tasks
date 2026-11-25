@@ -1,4 +1,8 @@
 import json
+import threading
+import urllib.error
+import urllib.request
+from zoneinfo import ZoneInfo
 import sqlite3
 import stat
 import tempfile
@@ -9,10 +13,15 @@ from django.template import Context, Template
 from django.test import SimpleTestCase, override_settings
 from django.urls import reverse
 
-from tasks import core
+from tasks import bridge, core, taskwarrior
 
 # Mittwoch, 25. Nov. 2026, 12:00 in Berlin
 NOW = datetime(2026, 11, 25, 11, 0, tzinfo=dt_timezone.utc)
+
+
+def U(c):
+    """Gültige Task-UUID aus einem Hex-Zeichen, z. B. U("b")."""
+    return f"{c * 8}-{c * 4}-{c * 4}-{c * 4}-{c * 12}"
 
 
 def epoch(text):
@@ -20,16 +29,16 @@ def epoch(text):
 
 
 CLI_EXPORT = [
-    {"id": 1, "uuid": "a", "description": "Alt und ohne alles", "entry": "20260101T090000Z", "status": "pending", "urgency": 1.5},
-    {"id": 2, "uuid": "b", "description": "Überfällig", "due": "20261120T230000Z", "entry": "20261101T090000Z",
+    {"id": 1, "uuid": U("a"), "description": "Alt und ohne alles", "entry": "20260101T090000Z", "status": "pending", "urgency": 1.5},
+    {"id": 2, "uuid": U("b"), "description": "Überfällig", "due": "20261120T230000Z", "entry": "20261101T090000Z",
      "status": "pending", "project": "projekt-a", "tags": ["kunde", "buero"], "priority": "H", "urgency": 19.2},
-    {"id": 3, "uuid": "c", "description": "Heute", "due": "20261125T160000Z", "entry": "20261120T090000Z",
+    {"id": 3, "uuid": U("c"), "description": "Heute", "due": "20261125T160000Z", "entry": "20261120T090000Z",
      "status": "pending", "start": "20261125T080000Z", "urgency": 14.0},
-    {"id": 4, "uuid": "d", "description": "Wartet noch", "wait": "20261201T000000Z", "entry": "20261120T090000Z",
+    {"id": 4, "uuid": U("d"), "description": "Wartet noch", "wait": "20261201T000000Z", "entry": "20261120T090000Z",
      "status": "pending", "urgency": 9.0},
-    {"id": 6, "uuid": "f", "description": "Morgen", "due": "20261126T100000Z", "entry": "20261120T090000Z",
+    {"id": 6, "uuid": U("f"), "description": "Morgen", "due": "20261126T100000Z", "entry": "20261120T090000Z",
      "status": "pending", "urgency": 8.5},
-    {"id": 5, "uuid": "e", "description": "Nächste Woche", "due": "20261201T230000Z", "entry": "20261120T090000Z",
+    {"id": 5, "uuid": U("e"), "description": "Nächste Woche", "due": "20261201T230000Z", "entry": "20261120T090000Z",
      "status": "pending", "urgency": 8.0},
 ]
 
@@ -47,6 +56,8 @@ class Sandbox(SimpleTestCase):
         (self.dir / "args.txt").unlink(missing_ok=True)
         script.write_text(
             "#!/bin/sh\n"
+            'case "$*" in *" modify "*) '
+            f'echo "$@" >> "{self.dir}/modify.txt"; exit 0;; esac\n'
             f'echo "$@" > "{self.dir}/args.txt"\n'
             f'cat "{self.dir}/out.json"\n'
             f'echo "{stderr}" >&2\n'
@@ -54,6 +65,10 @@ class Sandbox(SimpleTestCase):
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+    def modified(self):
+        path = self.dir / "modify.txt"
+        return path.read_text(encoding="utf-8").split() if path.exists() else []
 
     def fake_db(self, tasks, working_set=()):
         folder = self.dir / "data"
@@ -225,3 +240,134 @@ class ViewTests(Sandbox):
         html = Template("{% load tasks %}{% tasks_tile %}").render(Context({}))
         self.assertIn("tk-tile", html)
         self.assertIn("Heute", html)
+
+
+BERLIN = ZoneInfo("Europe/Berlin")
+LOCAL_NOW = NOW.astimezone(BERLIN)  # Mi, 25. Nov., 12:00
+
+
+class SnoozeDateTests(SimpleTestCase):
+    def due(self, text):
+        return datetime.fromisoformat(text).replace(tzinfo=BERLIN)
+
+    def test_overdue_counts_from_today(self):
+        new = taskwarrior.snoozed_due(self.due("2026-10-26T00:00"), 7, LOCAL_NOW)
+        self.assertEqual(new.astimezone(BERLIN), self.due("2026-12-02T00:00"))
+
+    def test_future_counts_from_due_and_keeps_time(self):
+        new = taskwarrior.snoozed_due(self.due("2026-11-26T11:00"), 7, LOCAL_NOW)
+        self.assertEqual(new.astimezone(BERLIN), self.due("2026-12-03T11:00"))
+
+    def test_today_counts_from_today(self):
+        new = taskwarrior.snoozed_due(self.due("2026-11-25T17:00"), 7, LOCAL_NOW)
+        self.assertEqual(new.astimezone(BERLIN), self.due("2026-12-02T17:00"))
+
+    def test_across_daylight_saving_keeps_local_midnight(self):
+        now = datetime(2027, 3, 20, 12, 0, tzinfo=BERLIN)
+        new = taskwarrior.snoozed_due(self.due("2027-03-25T00:00"), 7, now)
+        self.assertEqual(new, datetime(2027, 3, 31, 22, 0, tzinfo=dt_timezone.utc))  # 1. April 00:00 Sommerzeit
+
+    def test_rejects_bad_input(self):
+        for uuid, days in (("nicht-uuid", 7), (U("b"), 0), (U("b"), 999), (U("b"), True)):
+            with self.subTest(uuid=uuid, days=days), self.assertRaises(taskwarrior.TaskError):
+                taskwarrior.snooze("/gibts/nicht", uuid, days, LOCAL_NOW)
+
+
+class SnoozeCliTests(Sandbox):
+    def test_snooze_overdue_task(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:snooze", args=[U("b")]), HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 200)
+        # überfällig: ab heute (25. Nov.) + 7 = Mi, 2. Dez., Uhrzeit 00:00 Berlin bleibt
+        self.assertEqual(self.modified()[-3:], [U("b"), "modify", "due:20261201T230000Z"])
+        self.assertContains(response, "Verschoben auf Mi, 2. Dez.")
+
+    def test_button_only_for_tasks_with_due_date(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.get(reverse("tasks:tile"), {"all": "1"})
+        self.assertContains(response, 'class="tk-snooze"', count=4)  # b, c, f, e – nicht a
+        self.assertContains(response, 'name="csrfmiddlewaretoken"')
+
+    def test_task_without_due_date(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:snooze", args=[U("a")]), HTTP_HX_REQUEST="true")
+        self.assertContains(response, "Nicht verschoben – Task hat kein Fälligkeitsdatum")
+        self.assertEqual(self.modified(), [])
+
+    def test_without_htmx_redirects(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:snooze", args=[U("b")]))
+        self.assertRedirects(response, "/", fetch_redirect_response=False)
+
+    @override_settings(TASKS_SNOOZE_DAYS=3)
+    def test_snooze_days_setting(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        self.client.post(reverse("tasks:snooze", args=[U("f")]), HTTP_HX_REQUEST="true")
+        self.assertEqual(self.modified()[-1], "due:20261129T100000Z")  # morgen 11:00 + 3
+
+    def test_get_not_allowed(self):
+        self.assertEqual(self.client.get(reverse("tasks:snooze", args=[U("b")])).status_code, 405)
+
+
+class ReadOnlyTests(Sandbox):
+    def test_db_only_has_no_button_and_refuses(self):
+        self.fake_db({U("b"): {"description": "Überfällig", "status": "pending", "due": epoch("2026-11-20T23:00:00")}})
+        self.assertNotContains(self.client.get(reverse("tasks:tile")), "verschieben")
+        response = self.client.post(reverse("tasks:snooze", args=[U("b")]), HTTP_HX_REQUEST="true")
+        self.assertContains(response, "Verschieben geht hier nicht")
+
+
+class BridgeTests(Sandbox):
+    def setUp(self):
+        super().setUp()
+        self.fake_task(json.dumps(CLI_EXPORT))
+        self.key_file = self.dir / "bruecke.schluessel"
+        key = bridge.create_key(self.key_file)
+        server = bridge.make_server(key, str(self.dir / "task"), port=0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.url = f"http://127.0.0.1:{server.server_address[1]}"
+        # Django sieht kein task (wie im Container), nur die Brücke
+        self.enterContext(override_settings(TASKS_COMMAND=str(self.dir / "kein-task"),
+                                            TASKS_BRIDGE_URL=self.url, TASKS_BRIDGE_KEY_FILE=str(self.key_file)))
+
+    def test_reads_through_bridge(self):
+        tile = core.get_tile(now=NOW)
+        self.assertEqual((tile["source"], tile["can_write"]), ("Tasks-Brücke", True))
+        self.assertEqual([i["id"] for i in tile["items"]], [2, 3, 6])
+
+    def test_snooze_through_bridge(self):
+        response = self.client.post(reverse("tasks:snooze", args=[U("f")]), HTTP_HX_REQUEST="true")
+        self.assertEqual(self.modified()[-3:-1], [U("f"), "modify"])
+        self.assertContains(response, "Verschoben auf")
+
+    def test_key_file_is_private_and_reused(self):
+        self.assertEqual(self.key_file.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(bridge.create_key(self.key_file), self.key_file.read_text().strip())
+
+    def test_wrong_key_is_rejected(self):
+        self.key_file.write_text("falsch\n")
+        tile = core.get_tile(now=NOW)
+        self.assertEqual(tile["error"], "Tasks-Brücke: Schlüssel fehlt oder falsch")
+        self.assertEqual(self.modified(), [])
+
+    def test_only_known_paths(self):
+        key = self.key_file.read_text().strip()
+        for method, path in (("POST", "/tasks"), ("GET", f"/tasks/{U('b')}/snooze"), ("POST", "/tasks/x/delete")):
+            request = urllib.request.Request(self.url + path, method=method, data=b"{}" if method == "POST" else None,
+                                             headers={"Authorization": f"Bearer {key}"})
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request, timeout=5)
+            self.assertEqual(caught.exception.code, 404)
+
+    def test_bridge_down_falls_back_to_db_read_only(self):
+        self.fake_db({U("b"): {"description": "Aus der DB", "status": "pending", "due": epoch("2026-11-20T23:00:00")}})
+        with override_settings(TASKS_BRIDGE_URL="http://127.0.0.1:9"):
+            tile = core.get_tile(now=NOW)
+        self.assertEqual((tile["source"], tile["can_write"]), (core.DB_NAME, False))
+        self.assertEqual(tile["note"], "Tasks-Brücke nicht erreichbar – nur lesend")
+
+    def test_bridge_down_without_db_is_an_error(self):
+        with override_settings(TASKS_BRIDGE_URL="http://127.0.0.1:9"):
+            self.assertEqual(core.get_tile(now=NOW)["error"], "Tasks-Brücke nicht erreichbar")

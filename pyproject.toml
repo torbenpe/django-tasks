@@ -1,7 +1,7 @@
 [project]
 name = "django-tasks"
-version = "0.2.0"
-description = "Django-Kachel, die die offenen Tasks des lokalen Taskwarrior anzeigt"
+version = "0.3.0"
+description = "Django-Kachel für die offenen Tasks des lokalen Taskwarrior, mit Snooze"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["django>=5.2"]
