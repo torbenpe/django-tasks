@@ -1,0 +1,66 @@
+{# Tasks-Kachel (Taskwarrior). Erwartet `tile` im Kontext – Datenvertrag siehe README.md. #}
+{% url 'tasks:tile' as tile_url %}
+<section class="tk-tile" aria-label="Tasks"
+         hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}" hx-trigger="every {{ tile.poll_seconds }}s" hx-swap="outerHTML">
+
+  <header class="tk-head">
+    {# Tippen auf die Titelzeile klappt ein/aus – Zustand in collapse.js #}
+    <h2 class="tk-title">
+      <button type="button" class="tk-toggle" data-collapse="tasks" aria-controls="tk-body" aria-expanded="true">
+        <span class="tk-light is-{{ tile.status }}" role="img" aria-label="Status: {{ tile.status_label }}"></span>
+        <span>Tasks</span>
+        <span class="tk-summary">{{ tile.summary }}</span>
+        <svg class="tk-chevron" aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+    </h2>
+  </header>
+
+  <div class="tk-body" id="tk-body">
+  {% if tile.missing %}
+    <div class="tk-notice">
+      <p class="tk-notice-title">Kein Taskwarrior gefunden</p>
+      <p>Auf diesem Mac ist Taskwarrior nicht installiert oder seine Daten sind hier nicht sichtbar.
+        Installieren mit <code>brew install task</code>.</p>
+    </div>
+
+  {% elif tile.error %}
+    <p class="tk-error">{{ tile.error }}</p>
+
+  {% elif tile.items %}
+    <ul class="tk-list">
+      {% for item in tile.items %}
+        <li class="tk-item is-{{ item.kind }}{% if item.active %} is-active{% endif %}">
+          <span class="tk-id">{{ item.id|default:"·" }}</span>
+          <div class="tk-main">
+            <span class="tk-name" title="{{ item.name }}">{{ item.name }}</span>
+            {% if item.meta or item.label or item.priority or item.active %}
+              <div class="tk-line">
+                {% if item.priority %}<span class="tk-prio is-{{ item.priority|lower }}" title="Priorität {{ item.priority_label }}">{{ item.priority }}</span>{% endif %}
+                {% if item.active %}<span class="tk-active">läuft</span>{% endif %}
+                <span class="tk-meta">{{ item.meta }}</span>
+                {% if item.label %}<span class="tk-label">{{ item.label }}</span>{% endif %}
+              </div>
+            {% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+
+  {% else %}
+    <p class="tk-empty">Keine offenen Tasks.</p>
+  {% endif %}
+
+    <footer class="tk-foot">
+      {% if tile.has_more %}
+        <button type="button" class="tk-more" hx-get="{{ tile_url }}{% if not tile.show_all %}?all=1{% endif %}"
+                hx-target="closest .tk-tile" hx-swap="outerHTML">{% if tile.show_all %}Nur die ersten{% else %}Alle ({{ tile.count_all }}){% endif %}</button>
+      {% else %}
+        <span>{{ tile.source|default:"Taskwarrior" }}</span>
+      {% endif %}
+      <button type="button" class="tk-refresh" aria-label="Neu laden"
+              hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 4v7h-7"></path></svg>
+      </button>
+    </footer>
+  </div>
+</section>

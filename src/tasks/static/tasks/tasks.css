@@ -1,0 +1,128 @@
+/* Tasks-Kachel – 340 px, kompakt, dünne Linien (wie die Routinen-Kachel) */
+.tk-tile {
+  --tk-red: #B42318;
+  --tk-amber: #D99A00;
+  --tk-amber-text: #8A5A00;
+  --tk-green: #2E7D4F;
+  --tk-grey: #9A968E;
+  --tk-text: #1A1A18;
+  --tk-muted: #5E5B55;
+  --tk-line: #ECE9E3;
+  --tk-border: #DDDAD3;
+  --tk-bg: #FFFFFF;
+  --tk-soft: #F5F3EF;
+
+  width: 340px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  background: var(--tk-bg);
+  border: 1px solid var(--tk-border);
+  border-radius: 12px;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  color: var(--tk-text);
+}
+
+/* Kopf: Statuspunkt, Titel, Kurzfassung, Chevron – die ganze Zeile klappt */
+.tk-head { display: flex; align-items: center; padding-bottom: 8px; }
+.tk-title { flex: 1; min-width: 0; margin: 0; font-size: 22px; font-weight: 600; line-height: 28px; }
+.tk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  margin: -8px 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tk-light { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; background: var(--tk-grey); }
+.tk-light.is-red { background: var(--tk-red); }
+.tk-light.is-amber { background: var(--tk-amber); }
+.tk-light.is-green { background: var(--tk-green); }
+.tk-summary { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--tk-muted); white-space: nowrap; }
+.tk-chevron { color: var(--tk-muted); flex-shrink: 0; transition: transform .15s ease; }
+
+/* Eingeklappt: Zustand auf <html data-collapsed="…">, überlebt das HTMX-Neuladen */
+:root[data-collapsed~="tasks"] .tk-tile .tk-body { display: none; }
+:root[data-collapsed~="tasks"] .tk-tile .tk-head { padding-bottom: 0; }
+:root[data-collapsed~="tasks"] .tk-tile .tk-chevron { transform: rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) { .tk-chevron { transition: none; } }
+
+/* Einträge: ID · Beschreibung, darunter Priorität, Projekt/Tags und Fälligkeit (Text, nie nur Farbe) */
+.tk-list { list-style: none; margin: 0; padding: 0; }
+.tk-item { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; border-top: 1px solid var(--tk-line); }
+.tk-id { flex-shrink: 0; min-width: 18px; padding-top: 1px; font-size: 11px; line-height: 18px; color: var(--tk-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.tk-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tk-name {
+  font-size: 13px;
+  line-height: 20px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+.tk-item.is-over .tk-name, .tk-item.is-due .tk-name, .tk-item.is-active .tk-name { font-weight: 600; }
+.tk-line { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; line-height: 18px; color: var(--tk-muted); }
+.tk-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-label { flex-shrink: 0; margin-left: auto; white-space: nowrap; }
+.tk-item.is-due .tk-label { color: var(--tk-amber-text); font-weight: 600; }
+.tk-item.is-over .tk-label { color: var(--tk-red); font-weight: 600; }
+.tk-prio, .tk-active { flex-shrink: 0; padding: 0 5px; border-radius: 4px; font-size: 11px; line-height: 16px; font-weight: 600; background: var(--tk-soft); }
+.tk-prio.is-h { color: var(--tk-red); }
+.tk-prio.is-m { color: var(--tk-amber-text); }
+.tk-active { color: var(--tk-green); }
+
+.tk-empty, .tk-error { margin: 0; padding: 4px 0; border-top: 1px solid var(--tk-line); font-size: 13px; line-height: 20px; }
+.tk-empty { color: var(--tk-muted); }
+.tk-error { font-size: 12px; line-height: 18px; color: var(--tk-red); }
+
+/* Hinweis, wenn Taskwarrior fehlt – kein Fehler, nur Information */
+.tk-notice { padding: 6px 0; border-top: 1px solid var(--tk-line); font-size: 12px; line-height: 18px; color: var(--tk-muted); }
+.tk-notice p { margin: 0; }
+.tk-notice .tk-notice-title { margin-bottom: 2px; font-size: 13px; font-weight: 600; color: var(--tk-text); }
+.tk-notice code { padding: 0 4px; border-radius: 4px; background: var(--tk-soft); color: var(--tk-text); font-size: 11px; }
+
+/* Footer: „Alle (N)“ oder Quelle links, Neu laden rechts */
+.tk-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 6px; border-top: 1px solid var(--tk-line); font-size: 11px; color: var(--tk-muted); }
+.tk-more { position: relative; padding: 0; background: none; border: 0; font: inherit; color: var(--tk-muted); text-decoration: underline; cursor: pointer; }
+.tk-more::after { content: ""; position: absolute; inset: -12px -6px; }
+.tk-refresh { position: relative; width: 24px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--tk-bg); color: var(--tk-text); border: 1px solid var(--tk-border); border-radius: 6px; cursor: pointer; }
+.tk-refresh::after { content: ""; position: absolute; inset: -10px; }
+
+/* Dunkelmodus: folgt dem System, außer der Schalter hat ein Thema gesetzt (data-theme auf <html>) */
+:root[data-theme="dark"] .tk-tile {
+  --tk-red: #F2675C;
+  --tk-amber: #E5AC1E;
+  --tk-amber-text: #F0C04A;
+  --tk-green: #4CAF7A;
+  --tk-grey: #6F6C66;
+  --tk-text: #ECEAE6;
+  --tk-muted: #A19D95;
+  --tk-line: #2E2D2A;
+  --tk-border: #3A3935;
+  --tk-bg: #1F1F1D;
+  --tk-soft: #2A2927;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tk-tile {
+    --tk-red: #F2675C;
+    --tk-amber: #E5AC1E;
+    --tk-amber-text: #F0C04A;
+    --tk-green: #4CAF7A;
+    --tk-grey: #6F6C66;
+    --tk-text: #ECEAE6;
+    --tk-muted: #A19D95;
+    --tk-line: #2E2D2A;
+    --tk-border: #3A3935;
+    --tk-bg: #1F1F1D;
+    --tk-soft: #2A2927;
+  }
+}
