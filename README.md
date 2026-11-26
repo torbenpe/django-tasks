@@ -3,7 +3,8 @@
 Django-App mit einer Kachel, die die offenen Tasks des lokal installierten
 [Taskwarrior](https://taskwarrior.org) (Version 3) anzeigt – sortiert nach Urgency, mit Projekt, Tags,
 Priorität und Fälligkeit. Standardmäßig nur, was überfällig, heute oder morgen fällig ist; „Alle (N)“
-zeigt jeden offenen Task. Ein Snooze-Button verschiebt die Fälligkeit um 7 Tage.
+zeigt jeden offenen Task. Ein Snooze-Button verschiebt die Fälligkeit um 7 Tage, das Häkchen hakt den
+Task ab.
 
 Ist auf dem Mac kein Taskwarrior zu finden, zeigt die Kachel einen Hinweis statt eines Fehlers.
 
@@ -18,9 +19,9 @@ Mit `TASKS_SOURCE = "auto"` (Standard) in dieser Reihenfolge:
    Ergebnis wie im Terminal, samt Urgency aus der eigenen `.taskrc`. Gesucht wird im `PATH` und
    zusätzlich in `/opt/homebrew/bin` und `/usr/local/bin`.
 2. **Tasks-Brücke** – für Django im Linux-Container, in dem das Mac-Programm nicht läuft. Ein kleiner
-   Dienst auf dem Mac ruft dort `task` auf (siehe unten). Ergebnis wie unter 1, Snooze inklusive.
+   Dienst auf dem Mac ruft dort `task` auf (siehe unten). Ergebnis wie unter 1, Snooze und Abhaken inklusive.
 3. **`taskchampion.sqlite3`** – Notbehelf im Container, wenn keine Brücke eingerichtet ist oder sie nicht
-   antwortet. Nur lesend, also ohne Snooze; die Urgency rechnet das Paket mit den Standardgewichten von
+   antwortet. Nur lesend, also ohne Snooze und Häkchen; die Urgency rechnet das Paket mit den Standardgewichten von
    Taskwarrior nach (eigene `urgency.*`-Werte aus der `.taskrc` fehlen dann).
 
 Wartende Tasks (`wait` in der Zukunft) blendet die Kachel aus, wie `task next`.
@@ -37,11 +38,17 @@ späteren von Fälligkeit und heute, die Uhrzeit bleibt:
 Er ruft `task <uuid> modify due:…` auf – direkt, wenn `task` hier läuft, sonst über die Brücke. Mit der
 Datenbank allein (nur lesend) fehlt der Button. Tasks ohne Fälligkeit haben keinen.
 
+## Abhaken
+
+Das Häkchen rechts an jedem Task ruft `task <uuid> done` auf (direkt oder über die Brücke) und meldet
+„Erledigt: …“. Es fragt nicht nach; ein versehentliches Abhaken macht `task undo` rückgängig. Wiederkehrende
+Tasks legt Taskwarrior dabei wie gewohnt neu an. Mit der Datenbank allein fehlt das Häkchen.
+
 ## Einbauen
 
 ```toml
 # pyproject.toml – Version festnageln; das Archiv braucht kein git im Docker-Image
-dependencies = ["django-tasks @ https://github.com/torbenpe/django-tasks/archive/refs/tags/v0.3.0.tar.gz"]
+dependencies = ["django-tasks @ https://github.com/torbenpe/django-tasks/archive/refs/tags/v0.4.0.tar.gz"]
 ```
 
 ```python
@@ -65,8 +72,8 @@ ein Skript für `data-collapse` (etwa aus django-routinen), dieses weglassen (so
 
 ### Im Container (OrbStack/Docker): Tasks-Brücke
 
-Die Brücke läuft auf dem Mac (als LaunchAgent) und kann genau zwei Dinge: offene Tasks liefern und eine
-Fälligkeit verschieben. Sie hört nur auf 127.0.0.1 und verlangt einen Schlüssel, den sie beim ersten Start
+Die Brücke läuft auf dem Mac (als LaunchAgent) und kann genau drei Dinge: offene Tasks liefern, eine
+Fälligkeit verschieben und einen Task abhaken. Sie hört nur auf 127.0.0.1 und verlangt einen Schlüssel, den sie beim ersten Start
 selbst anlegt (Rechte 600). Django liest ihn aus derselben Datei – den Ordner dafür in den Container
 einbinden.
 
@@ -103,21 +110,22 @@ lesend“.
 | `TASKS_BRIDGE_URL` | – | Adresse der Brücke, etwa `http://host.docker.internal:8504` |
 | `TASKS_BRIDGE_KEY_FILE` | – | Datei mit dem Schlüssel der Brücke |
 | `TASKS_SNOOZE_DAYS` | `7` | so weit verschiebt der Snooze-Button |
-| `TASKS_HOME_URL` | `"/"` | Ziel nach dem Snooze ohne HTMX (Pfad oder URL-Name) |
+| `TASKS_HOME_URL` | `"/"` | Ziel nach Snooze oder Abhaken ohne HTMX (Pfad oder URL-Name) |
 | `TASKS_DAYS_AHEAD` | `1` | standardmäßig gezeigt: fällig bis heute + so viele Tage (0 = nur bis heute) |
 | `TASKS_POLL_SECONDS` | `300` | Abstand, in dem sich die Kachel neu lädt |
 | `TASKS_TIMEOUT` | `10` | Sekunden, die `task` oder die Brücke höchstens brauchen |
 
 `task` läuft mit `rc.gc=off` (das Anzeigen nummeriert die IDs nicht um); `task export` zusätzlich mit
-`rc.hooks=off`, `task modify` mit den eigenen Hooks.
+`rc.hooks=off`, `task modify` und `task done` mit den eigenen Hooks.
 Die Kachel hat keinen Zugriffsschutz; den muss das Projekt mitbringen.
 
 ## Kachel
 
-- Statuspunkt: rot, wenn etwas überfällig ist; gelb, wenn etwas heute fällig ist; sonst grün. Grau ohne Daten.
-- Kopf: „3 fällig · 13 offen“. Nach dem Snooze: „Verschoben auf Mi, 2. Dez.“ Ist nichts fällig: „Nichts fällig bis morgen.“ und darunter „Alle (N)“.
+- Statuspunkt (quadratisch, wie bei den Routinen): rot, wenn etwas überfällig ist; gelb, wenn etwas heute fällig ist; sonst grün. Grau ohne Daten.
+- Kopf: „3 fällig · 13 offen“. Nach dem Snooze: „Verschoben auf Mi, 2. Dez.“, nach dem Abhaken: „Erledigt: …“. Ist nichts fällig: „Nichts fällig bis morgen.“ und darunter „Alle (N)“.
 - Je Task: ID, Beschreibung (höchstens zwei Zeilen), Priorität, „läuft“ bei gestarteten Tasks,
-  Projekt und Tags, Fälligkeit („überfällig seit 2 Tagen“, „heute fällig“, „fällig Mi, 2. Dez“).
+  Projekt und Tags, Fälligkeit („überfällig seit 2 Tagen“, „heute fällig“, „fällig Mi, 2. Dez“);
+  rechts Snooze und Häkchen.
 
 ## Entwickeln
 

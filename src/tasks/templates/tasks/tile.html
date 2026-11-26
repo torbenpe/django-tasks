@@ -46,17 +46,29 @@
               </div>
             {% endif %}
           </div>
-          {% if tile.can_write and item.has_due %}
-            <form method="post" action="{% url 'tasks:snooze' item.uuid %}"
-                  hx-post="{% url 'tasks:snooze' item.uuid %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
-              {% csrf_token %}
-              {% if tile.show_all %}<input type="hidden" name="all" value="1">{% endif %}
-              <button type="submit" class="tk-snooze" aria-label="{{ item.name }} um {{ tile.snooze_days }} Tage verschieben"
-                      title="Fälligkeit um {{ tile.snooze_days }} Tage verschieben">
-                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2"></path><path d="M5 3L2 6M19 3l3 3"></path></svg>
-                <span>+{{ tile.snooze_days }}</span>
-              </button>
-            </form>
+          {% if tile.can_write %}
+            <div class="tk-actions">
+              {% if item.has_due %}
+                <form method="post" action="{% url 'tasks:snooze' item.uuid %}"
+                      hx-post="{% url 'tasks:snooze' item.uuid %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+                  {% csrf_token %}
+                  {% if tile.show_all %}<input type="hidden" name="all" value="1">{% endif %}
+                  <button type="submit" class="tk-snooze" aria-label="{{ item.name }} um {{ tile.snooze_days }} Tage verschieben"
+                          title="Fälligkeit um {{ tile.snooze_days }} Tage verschieben">
+                    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2"></path><path d="M5 3L2 6M19 3l3 3"></path></svg>
+                    <span>+{{ tile.snooze_days }}</span>
+                  </button>
+                </form>
+              {% endif %}
+              <form method="post" action="{% url 'tasks:done' item.uuid %}"
+                    hx-post="{% url 'tasks:done' item.uuid %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+                {% csrf_token %}
+                {% if tile.show_all %}<input type="hidden" name="all" value="1">{% endif %}
+                <button type="submit" class="tk-check" aria-label="{{ item.name }} erledigt" title="Erledigt">
+                  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>
+                </button>
+              </form>
+            </div>
           {% endif %}
         </li>
       {% endfor %}

@@ -78,18 +78,33 @@ def snoozed_due(due, days, now):
     return target.astimezone(timezone.utc)
 
 
+def _pending(command, uuid, timeout):
+    """Der offene Task mit dieser UUID, sonst TaskError."""
+    if not UUID_RE.fullmatch(uuid or ""):
+        raise TaskError("ungültige Task-Kennung")
+    task = next((t for t in export(command, (uuid,), timeout) if t.get("uuid") == uuid), None)
+    if task is None or task.get("status") != "pending":
+        raise TaskError("Task nicht gefunden oder nicht mehr offen")
+    return task
+
+
 def snooze(command, uuid, days, now, timeout=10):
     """Verschiebt die Fälligkeit eines offenen Tasks. Gibt die neue Fälligkeit (UTC) zurück."""
     if not UUID_RE.fullmatch(uuid or ""):
         raise TaskError("ungültige Task-Kennung")
     if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= SNOOZE_DAYS_MAX:
         raise TaskError(f"Snooze nur um 1–{SNOOZE_DAYS_MAX} Tage")
-    task = next((t for t in export(command, (uuid,), timeout) if t.get("uuid") == uuid), None)
-    if task is None or task.get("status") != "pending":
-        raise TaskError("Task nicht gefunden oder nicht mehr offen")
+    task = _pending(command, uuid, timeout)
     due = parse_date(task.get("due"))
     if due is None:
         raise TaskError("Task hat kein Fälligkeitsdatum")
     new_due = snoozed_due(due, days, now)
     _run(command, [uuid, "modify", f"due:{new_due.strftime('%Y%m%dT%H%M%SZ')}"], timeout, "task modify")
     return new_due
+
+
+def done(command, uuid, timeout=10):
+    """Hakt einen offenen Task ab (`task <uuid> done`). Gibt seine Beschreibung zurück."""
+    task = _pending(command, uuid, timeout)
+    _run(command, [uuid, "done"], timeout, "task done")
+    return task.get("description", "")

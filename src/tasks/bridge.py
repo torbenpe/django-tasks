@@ -1,15 +1,16 @@
 """Tasks-Brücke: ein kleiner HTTP-Dienst auf dem Mac, damit Django im Container Taskwarrior nutzen kann.
 
 Im Linux-Container läuft das Mac-Programm `task` nicht, und `~/.task` ist dort nur lesend eingebunden.
-Die Brücke läuft deshalb auf dem Mac, als der angemeldete Benutzer, und kann genau zwei Dinge:
+Die Brücke läuft deshalb auf dem Mac, als der angemeldete Benutzer, und kann genau drei Dinge:
 
     GET  /tasks                    offene Tasks wie `task status:pending export`
     POST /tasks/<uuid>/snooze      Fälligkeit verschieben, Body {"days": 7}
+    POST /tasks/<uuid>/done        Task abhaken
 
 Sonst nichts – keine beliebigen Befehle, kein Löschen, kein Ändern anderer Felder.
 
 Sie hört nur auf 127.0.0.1 und verlangt einen Schlüssel (Header `Authorization: Bearer …`). Ohne ihn
-könnte jede Webseite im Browser des Macs per fetch() Tasks verschieben. Den Schlüssel legt sie beim
+könnte jede Webseite im Browser des Macs per fetch() Tasks verschieben oder abhaken. Den Schlüssel legt sie beim
 ersten Start selbst an (nur für den Benutzer lesbar); Django liest ihn aus derselben Datei – im
 Container über einen eingebundenen Ordner. So muss niemand einen Schlüssel von Hand übertragen.
 
@@ -34,7 +35,7 @@ from . import taskwarrior
 
 DEFAULT_PORT = 8504
 BODY_MAX = 1024
-_SNOOZE_PATH = re.compile(r"/tasks/([0-9a-f-]{36})/snooze")
+_TASK_PATH = re.compile(r"/tasks/([0-9a-f-]{36})/(snooze|done)")
 
 
 def read_key(path):
@@ -80,11 +81,16 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/tasks":
                 with self.lock:
                     return self._reply(200, {"tasks": taskwarrior.export(self.task_command)})
-            match = _SNOOZE_PATH.fullmatch(path)
+            match = _TASK_PATH.fullmatch(path)
             if method == "POST" and match:
+                uuid, action = match.groups()
+                if action == "done":
+                    with self.lock:
+                        description = taskwarrior.done(self.task_command, uuid)
+                    return self._reply(200, {"description": description})
                 days = self._body().get("days")
                 with self.lock:
-                    due = taskwarrior.snooze(self.task_command, match.group(1), days, datetime.now().astimezone())
+                    due = taskwarrior.snooze(self.task_command, uuid, days, datetime.now().astimezone())
                 return self._reply(200, {"due": due.strftime("%Y%m%dT%H%M%SZ")})
         except taskwarrior.TaskError as exc:
             return self._reply(502, {"error": str(exc)})

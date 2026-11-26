@@ -42,7 +42,8 @@
   text-align: left;
   cursor: pointer;
 }
-.tk-light { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; background: var(--tk-grey); }
+/* Statuspunkt quadratisch: runde Punkte sind Healthchecks u. ä. vorbehalten */
+.tk-light { width: 14px; height: 14px; border-radius: 0; flex-shrink: 0; background: var(--tk-grey); }
 .tk-light.is-red { background: var(--tk-red); }
 .tk-light.is-amber { background: var(--tk-amber); }
 .tk-light.is-green { background: var(--tk-green); }
@@ -80,8 +81,9 @@
 .tk-prio.is-m { color: var(--tk-amber-text); }
 .tk-active { color: var(--tk-green); }
 
-/* Snooze: Fälligkeit um N Tage verschieben – rechts in der Zeile, Trefferfläche ~44 px */
-.tk-item form { display: flex; flex-shrink: 0; margin: 0; align-self: center; }
+/* Rechts in der Zeile: Snooze (Fälligkeit um N Tage verschieben) und Häkchen, Trefferfläche ~44 px */
+.tk-actions { display: flex; flex-shrink: 0; align-items: center; gap: 4px; align-self: center; }
+.tk-item form { display: flex; margin: 0; }
 .tk-snooze {
   position: relative;
   display: flex;
@@ -97,7 +99,25 @@
   cursor: pointer;
 }
 .tk-snooze:hover { color: var(--tk-text); border-color: var(--tk-muted); }
-.tk-snooze::after { content: ""; position: absolute; inset: -8px -4px; }
+.tk-snooze::after { content: ""; position: absolute; inset: -8px -2px; }
+/* Häkchen wie in der Routinen-Kachel */
+.tk-check {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tk-bg);
+  color: var(--tk-text);
+  border: 1px solid var(--tk-border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.tk-check:hover { border-color: var(--tk-muted); }
+.tk-check::after { content: ""; position: absolute; inset: -6px -2px; }
 .tk-flash, .tk-note { margin: 0; padding: 4px 0; border-top: 1px solid var(--tk-line); font-size: 12px; line-height: 18px; color: var(--tk-muted); }
 .tk-flash { color: var(--tk-text); }
 

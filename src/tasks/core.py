@@ -1,11 +1,11 @@
-"""Offene Tasks des lokalen Taskwarrior (Version 3) als Kachel, mit Snooze.
+"""Offene Tasks des lokalen Taskwarrior (Version 3) als Kachel, mit Snooze und Abhaken.
 
 Drei Wege an die Daten, in dieser Reihenfolge (`TASKS_SOURCE = "auto"`):
 
 1. `task export` – wenn das Programm hier läuft (Django direkt auf dem Mac). Genau wie im Terminal,
-   samt Urgency aus der eigenen `.taskrc`. Snooze ruft `task … modify` direkt auf.
+   samt Urgency aus der eigenen `.taskrc`. Snooze und Abhaken rufen `task … modify`/`done` direkt auf.
 2. Die Tasks-Brücke (`tasks.bridge`) – für Django im Linux-Container, in dem das Mac-Programm nicht
-   läuft. Sie läuft auf dem Mac und ruft dort `task` auf; Ergebnis wie unter 1, Snooze inklusive.
+   läuft. Sie läuft auf dem Mac und ruft dort `task` auf; Ergebnis wie unter 1, Ändern inklusive.
    Gesetzt über `TASKS_BRIDGE_URL` und `TASKS_BRIDGE_KEY_FILE`.
 3. `taskchampion.sqlite3` lesen – Notbehelf im Container, wenn die Brücke fehlt oder nicht antwortet.
    Nur lesend; die Urgency wird mit den Standardgewichten von Taskwarrior nachgerechnet.
@@ -268,28 +268,46 @@ def load(now=None):
     raise NotInstalled
 
 
-def snooze_task(uuid, days=None):
-    """Fälligkeit um `days` (Standard TASKS_SNOOZE_DAYS) verschieben – ab dem späteren von Fälligkeit
-    und heute. Über `task` hier, sonst über die Brücke. Wirft ReadOnly oder SourceError."""
-    days = days or _setting("TASKS_SNOOZE_DAYS", SNOOZE_DAYS)
+def _change(local, path, payload, remote):
+    """Ändert einen Task: über `task` hier (`local(command, timeout)`), sonst über die Brücke
+    (`remote(antwort)`). Wirft ReadOnly oder SourceError."""
     source = _setting("TASKS_SOURCE", "auto")
+    timeout = _setting("TASKS_TIMEOUT", TIMEOUT)
     if source in ("auto", "cli"):
         command = find_command()
         if command:
             try:
-                return taskwarrior.snooze(command, uuid, days, timezone.localtime(),
-                                          timeout=_setting("TASKS_TIMEOUT", TIMEOUT))
+                return local(command, timeout)
             except taskwarrior.TaskError as exc:
                 raise SourceError(str(exc)) from None
     if source in ("auto", "bridge"):
         config = bridge_config()
         if config:
             try:
-                answer = _bridge(config, "POST", f"/tasks/{uuid}/snooze", {"days": days})
+                return remote(_bridge(config, "POST", path, payload))
             except ConnectionError as exc:
                 raise SourceError(str(exc)) from None
-            return taskwarrior.parse_date(answer.get("due"))
     raise ReadOnly
+
+
+def snooze_task(uuid, days=None):
+    """Fälligkeit um `days` (Standard TASKS_SNOOZE_DAYS) verschieben – ab dem späteren von Fälligkeit
+    und heute. Gibt die neue Fälligkeit zurück."""
+    days = days or _setting("TASKS_SNOOZE_DAYS", SNOOZE_DAYS)
+    return _change(
+        lambda command, timeout: taskwarrior.snooze(command, uuid, days, timezone.localtime(), timeout=timeout),
+        f"/tasks/{uuid}/snooze", {"days": days},
+        lambda answer: taskwarrior.parse_date(answer.get("due")),
+    )
+
+
+def complete_task(uuid):
+    """Task abhaken (`task <uuid> done`). Gibt seine Beschreibung zurück."""
+    return _change(
+        lambda command, timeout: taskwarrior.done(command, uuid, timeout=timeout),
+        f"/tasks/{uuid}/done", {},
+        lambda answer: str(answer.get("description") or ""),
+    )
 
 
 def can_write(source):

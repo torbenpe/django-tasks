@@ -2,6 +2,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from unittest import mock
 from zoneinfo import ZoneInfo
 import sqlite3
 import stat
@@ -56,7 +57,7 @@ class Sandbox(SimpleTestCase):
         (self.dir / "args.txt").unlink(missing_ok=True)
         script.write_text(
             "#!/bin/sh\n"
-            'case "$*" in *" modify "*) '
+            'case "$*" in *" modify "*|*" done") '
             f'echo "$@" >> "{self.dir}/modify.txt"; exit 0;; esac\n'
             f'echo "$@" > "{self.dir}/args.txt"\n'
             f'cat "{self.dir}/out.json"\n'
@@ -274,7 +275,8 @@ class SnoozeDateTests(SimpleTestCase):
 
 
 class SnoozeCliTests(Sandbox):
-    def test_snooze_overdue_task(self):
+    @mock.patch("django.utils.timezone.now", return_value=NOW)  # „heute“ steckt im Ergebnis
+    def test_snooze_overdue_task(self, _now):
         self.fake_task(json.dumps(CLI_EXPORT))
         response = self.client.post(reverse("tasks:snooze", args=[U("b")]), HTTP_HX_REQUEST="true")
         self.assertEqual(response.status_code, 200)
@@ -309,12 +311,45 @@ class SnoozeCliTests(Sandbox):
         self.assertEqual(self.client.get(reverse("tasks:snooze", args=[U("b")])).status_code, 405)
 
 
+class DoneCliTests(Sandbox):
+    def test_done(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:done", args=[U("b")]), HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.modified()[-2:], [U("b"), "done"])
+        self.assertContains(response, "Erledigt: Überfällig")
+
+    def test_button_for_every_task(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.get(reverse("tasks:tile"), {"all": "1"})
+        self.assertContains(response, 'class="tk-check"', count=5)  # auch a ohne Fälligkeit
+        self.assertContains(response, "Alt und ohne alles erledigt")
+
+    def test_unknown_task(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:done", args=[U("9")]), HTTP_HX_REQUEST="true")
+        self.assertContains(response, "Nicht abgehakt – Task nicht gefunden oder nicht mehr offen")
+        self.assertEqual(self.modified(), [])
+
+    def test_without_htmx_redirects(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:done", args=[U("b")]))
+        self.assertRedirects(response, "/", fetch_redirect_response=False)
+        self.assertEqual(self.modified()[-1], "done")
+
+    def test_get_not_allowed(self):
+        self.assertEqual(self.client.get(reverse("tasks:done", args=[U("b")])).status_code, 405)
+
+
 class ReadOnlyTests(Sandbox):
     def test_db_only_has_no_button_and_refuses(self):
         self.fake_db({U("b"): {"description": "Überfällig", "status": "pending", "due": epoch("2026-11-20T23:00:00")}})
         self.assertNotContains(self.client.get(reverse("tasks:tile")), "verschieben")
         response = self.client.post(reverse("tasks:snooze", args=[U("b")]), HTTP_HX_REQUEST="true")
         self.assertContains(response, "Verschieben geht hier nicht")
+        self.assertNotContains(response, 'class="tk-check"')
+        response = self.client.post(reverse("tasks:done", args=[U("b")]), HTTP_HX_REQUEST="true")
+        self.assertContains(response, "Abhaken geht hier nicht")
 
 
 class BridgeTests(Sandbox):
@@ -342,6 +377,11 @@ class BridgeTests(Sandbox):
         self.assertEqual(self.modified()[-3:-1], [U("f"), "modify"])
         self.assertContains(response, "Verschoben auf")
 
+    def test_done_through_bridge(self):
+        response = self.client.post(reverse("tasks:done", args=[U("f")]), HTTP_HX_REQUEST="true")
+        self.assertEqual(self.modified()[-2:], [U("f"), "done"])
+        self.assertContains(response, "Erledigt: Morgen")
+
     def test_key_file_is_private_and_reused(self):
         self.assertEqual(self.key_file.stat().st_mode & 0o777, 0o600)
         self.assertEqual(bridge.create_key(self.key_file), self.key_file.read_text().strip())
@@ -354,7 +394,8 @@ class BridgeTests(Sandbox):
 
     def test_only_known_paths(self):
         key = self.key_file.read_text().strip()
-        for method, path in (("POST", "/tasks"), ("GET", f"/tasks/{U('b')}/snooze"), ("POST", "/tasks/x/delete")):
+        for method, path in (("POST", "/tasks"), ("GET", f"/tasks/{U('b')}/snooze"), ("GET", f"/tasks/{U('b')}/done"),
+                             ("POST", "/tasks/x/delete")):
             request = urllib.request.Request(self.url + path, method=method, data=b"{}" if method == "POST" else None,
                                              headers={"Authorization": f"Bearer {key}"})
             with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as caught:
