@@ -1,9 +1,11 @@
 """Tasks-Brücke: ein kleiner HTTP-Dienst auf dem Mac, damit Django im Container Taskwarrior nutzen kann.
 
 Im Linux-Container läuft das Mac-Programm `task` nicht, und `~/.task` ist dort nur lesend eingebunden.
-Die Brücke läuft deshalb auf dem Mac, als der angemeldete Benutzer, und kann genau drei Dinge:
+Die Brücke läuft deshalb auf dem Mac, als der angemeldete Benutzer, und kann genau vier Dinge:
 
     GET  /tasks                    offene Tasks wie `task status:pending export`
+    POST /tasks                    Task anlegen, Body {"description": …, "project": …, "tags": […],
+                                   "priority": …, "due": "JJJJ-MM-TT"}
     POST /tasks/<uuid>/snooze      Fälligkeit verschieben, Body {"days": 7}
     POST /tasks/<uuid>/done        Task abhaken
 
@@ -34,7 +36,7 @@ from pathlib import Path
 from . import taskwarrior
 
 DEFAULT_PORT = 8504
-BODY_MAX = 1024
+BODY_MAX = 8192  # reicht für 300 Zeichen Beschreibung, auch als \uXXXX
 _TASK_PATH = re.compile(r"/tasks/([0-9a-f-]{36})/(snooze|done)")
 
 
@@ -81,6 +83,11 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/tasks":
                 with self.lock:
                     return self._reply(200, {"tasks": taskwarrior.export(self.task_command)})
+            if method == "POST" and path == "/tasks":
+                fields = self._body()
+                with self.lock:
+                    task_id, description = taskwarrior.add(self.task_command, fields)
+                return self._reply(200, {"id": task_id, "description": description})
             match = _TASK_PATH.fullmatch(path)
             if method == "POST" and match:
                 uuid, action = match.groups()

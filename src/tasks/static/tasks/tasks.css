@@ -131,12 +131,40 @@
 .tk-notice .tk-notice-title { margin-bottom: 2px; font-size: 13px; font-weight: 600; color: var(--tk-text); }
 .tk-notice code { padding: 0 4px; border-radius: 4px; background: var(--tk-soft); color: var(--tk-text); font-size: 11px; }
 
-/* Footer: „Alle (N)“ oder Quelle links, Neu laden rechts */
+/* Footer: „Alle (N)“ oder Quelle links, + und Neu laden rechts */
 .tk-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 6px; border-top: 1px solid var(--tk-line); font-size: 11px; color: var(--tk-muted); }
 .tk-more { position: relative; padding: 0; background: none; border: 0; font: inherit; color: var(--tk-muted); text-decoration: underline; cursor: pointer; }
 .tk-more::after { content: ""; position: absolute; inset: -12px -6px; }
 .tk-refresh { position: relative; width: 24px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--tk-bg); color: var(--tk-text); border: 1px solid var(--tk-border); border-radius: 6px; cursor: pointer; }
 .tk-refresh::after { content: ""; position: absolute; inset: -10px; }
+.tk-foot-buttons { display: flex; align-items: center; gap: 16px; }
+.tk-add { position: relative; width: 24px; height: 24px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--tk-bg); color: var(--tk-text); border: 1px solid var(--tk-border); border-radius: 6px; cursor: pointer; }
+.tk-add::after { content: ""; position: absolute; inset: -10px -8px; }
+
+/* Neuer Task: ersetzt die Liste in der Kachel, kein Polling solange offen (wie bei den Routinen) */
+.tk-form { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 4px; border-top: 1px solid var(--tk-line); }
+.tk-form-title { margin: 0; font-size: 13px; font-weight: 600; }
+.tk-form .tk-error { border-top: 0; padding: 0; }
+.tk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; color: var(--tk-muted); }
+.tk-field input, .tk-field select {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding: 0 10px;
+  background: var(--tk-bg);
+  color: var(--tk-text);
+  border: 1px solid var(--tk-border);
+  border-radius: 8px;
+  font: 16px/1.2 'IBM Plex Sans', system-ui, sans-serif;   /* 16 px: iOS zoomt sonst beim Antippen */
+}
+.tk-field [aria-invalid="true"] { border-color: var(--tk-red); }
+.tk-field-error { font-style: normal; color: var(--tk-red); }
+.tk-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tk-hint { margin: 0; font-size: 12px; line-height: 18px; color: var(--tk-muted); }
+.tk-form-actions { display: flex; align-items: center; gap: 8px; }
+.tk-spacer { flex: 1; }
+.tk-btn { min-height: 36px; padding: 0 12px; background: var(--tk-bg); color: var(--tk-text); border: 1px solid var(--tk-border); border-radius: 8px; font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; cursor: pointer; }
+.tk-btn.is-primary { background: var(--tk-text); color: var(--tk-bg); border-color: var(--tk-text); }
 
 /* Dunkelmodus: folgt dem System, außer der Schalter hat ein Thema gesetzt (data-theme auf <html>) */
 :root[data-theme="dark"] .tk-tile {

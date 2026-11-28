@@ -1,7 +1,8 @@
 {# Tasks-Kachel (Taskwarrior). Erwartet `tile` im Kontext – Datenvertrag siehe README.md. #}
 {% url 'tasks:tile' as tile_url %}
+{# Beim Anlegen kein Polling, sonst würde das Formular mitten im Tippen ersetzt #}
 <section class="tk-tile" aria-label="Tasks"
-         hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}" hx-trigger="every {{ tile.poll_seconds }}s" hx-swap="outerHTML">
+         {% if not tile.edit %}hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}" hx-trigger="every {{ tile.poll_seconds }}s" hx-swap="outerHTML"{% endif %}>
 
   <header class="tk-head">
     {# Tippen auf die Titelzeile klappt ein/aus – Zustand in collapse.js #}
@@ -16,6 +17,55 @@
   </header>
 
   <div class="tk-body" id="tk-body">
+  {% if tile.edit %}
+    {% with e=tile.edit %}
+    <form class="tk-form" method="post" action="{% url 'tasks:add' %}"
+          hx-post="{% url 'tasks:add' %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+      {% csrf_token %}
+      {% if tile.show_all %}<input type="hidden" name="all" value="1">{% endif %}
+      <p class="tk-form-title">Neuer Task</p>
+      {% if e.message %}<p class="tk-error" role="alert">{{ e.message }}</p>{% endif %}
+
+      <label class="tk-field">
+        <span>Beschreibung{% if e.errors.description %} <em class="tk-field-error">– {{ e.errors.description }}</em>{% endif %}</span>
+        <input name="description" value="{{ e.values.description }}" maxlength="300" required autocomplete="off" autofocus{% if e.errors.description %} aria-invalid="true"{% endif %}>
+      </label>
+      <div class="tk-pair">
+        <label class="tk-field">
+          <span>Projekt{% if e.errors.project %} <em class="tk-field-error">– {{ e.errors.project }}</em>{% endif %}</span>
+          <input name="project" value="{{ e.values.project }}" maxlength="80" autocomplete="off" autocapitalize="none"
+                 {% if e.projects %}list="tk-projects"{% endif %}{% if e.errors.project %} aria-invalid="true"{% endif %}>
+          {% if e.projects %}<datalist id="tk-projects">{% for project in e.projects %}<option value="{{ project }}"></option>{% endfor %}</datalist>{% endif %}
+        </label>
+        <label class="tk-field">
+          <span>Priorität{% if e.errors.priority %} <em class="tk-field-error">– {{ e.errors.priority }}</em>{% endif %}</span>
+          <select name="priority"{% if e.errors.priority %} aria-invalid="true"{% endif %}>
+            {% for value, label in e.priorities %}<option value="{{ value }}"{% if value == e.values.priority %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="tk-pair">
+        <label class="tk-field">
+          <span>Tags{% if e.errors.tags %} <em class="tk-field-error">– {{ e.errors.tags }}</em>{% endif %}</span>
+          <input name="tags" value="{{ e.values.tags }}" autocomplete="off" autocapitalize="none" placeholder="kunde buero"{% if e.errors.tags %} aria-invalid="true"{% endif %}>
+        </label>
+        <label class="tk-field">
+          <span>Fällig{% if e.errors.due %} <em class="tk-field-error">– {{ e.errors.due }}</em>{% endif %}</span>
+          <input type="date" name="due" value="{{ e.values.due }}"{% if e.errors.due %} aria-invalid="true"{% endif %}>
+        </label>
+      </div>
+      <p class="tk-hint">Tags mit Leerzeichen trennen. Ohne Fälligkeit erscheint der Task nur unter „Alle“.</p>
+
+      <div class="tk-form-actions">
+        <span class="tk-spacer"></span>
+        <button type="button" class="tk-btn" hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}"
+                hx-target="closest .tk-tile" hx-swap="outerHTML">Abbrechen</button>
+        <button type="submit" class="tk-btn is-primary">Anlegen</button>
+      </div>
+    </form>
+    {% endwith %}
+
+  {% else %}
   {% if tile.missing %}
     <div class="tk-notice">
       <p class="tk-notice-title">Kein Taskwarrior gefunden</p>
@@ -77,7 +127,7 @@
   {% elif tile.count_all %}
     <p class="tk-empty">Nichts fällig bis {% if tile.days_ahead == 0 %}heute{% elif tile.days_ahead == 1 %}morgen{% else %}in {{ tile.days_ahead }} Tagen{% endif %}.</p>
   {% else %}
-    <p class="tk-empty">Keine offenen Tasks.</p>
+    <p class="tk-empty">Keine offenen Tasks.{% if tile.can_write %} Mit + anlegen.{% endif %}</p>
   {% endif %}
 
     <footer class="tk-foot">
@@ -88,10 +138,19 @@
       {% else %}
         <span>{{ tile.source|default:"Taskwarrior" }}</span>
       {% endif %}
-      <button type="button" class="tk-refresh" aria-label="Neu laden"
-              hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
-        <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 4v7h-7"></path></svg>
-      </button>
+      <span class="tk-foot-buttons">
+        {% if tile.can_write %}
+          <button type="button" class="tk-add" aria-label="Neuer Task" title="Neuer Task"
+                  hx-get="{{ tile_url }}?edit=neu{% if tile.show_all %}&amp;all=1{% endif %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+            <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+        {% endif %}
+        <button type="button" class="tk-refresh" aria-label="Neu laden"
+                hx-get="{{ tile_url }}{% if tile.show_all %}?all=1{% endif %}" hx-target="closest .tk-tile" hx-swap="outerHTML">
+          <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 4v7h-7"></path></svg>
+        </button>
+      </span>
     </footer>
+  {% endif %}
   </div>
 </section>

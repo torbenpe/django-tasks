@@ -57,6 +57,9 @@ class Sandbox(SimpleTestCase):
         (self.dir / "args.txt").unlink(missing_ok=True)
         script.write_text(
             "#!/bin/sh\n"
+            # task add: Argumente je Zeile festhalten (Beschreibung mit Leerzeichen bleibt ein Argument)
+            'case "$*" in *" add "*) '
+            f'printf "%s\\n" "$@" > "{self.dir}/add.txt"; echo "Created task 7."; exit 0;; esac\n'
             'case "$*" in *" modify "*|*" done") '
             f'echo "$@" >> "{self.dir}/modify.txt"; exit 0;; esac\n'
             f'echo "$@" > "{self.dir}/args.txt"\n'
@@ -66,6 +69,10 @@ class Sandbox(SimpleTestCase):
             encoding="utf-8",
         )
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+    def added(self):
+        path = self.dir / "add.txt"
+        return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
     def modified(self):
         path = self.dir / "modify.txt"
@@ -302,7 +309,8 @@ class SnoozeCliTests(Sandbox):
         self.assertRedirects(response, "/", fetch_redirect_response=False)
 
     @override_settings(TASKS_SNOOZE_DAYS=3)
-    def test_snooze_days_setting(self):
+    @mock.patch("django.utils.timezone.now", return_value=NOW)
+    def test_snooze_days_setting(self, _now):
         self.fake_task(json.dumps(CLI_EXPORT))
         self.client.post(reverse("tasks:snooze", args=[U("f")]), HTTP_HX_REQUEST="true")
         self.assertEqual(self.modified()[-1], "due:20261129T100000Z")  # morgen 11:00 + 3
@@ -341,6 +349,76 @@ class DoneCliTests(Sandbox):
         self.assertEqual(self.client.get(reverse("tasks:done", args=[U("b")])).status_code, 405)
 
 
+class AddCliTests(Sandbox):
+    def post(self, **data):
+        return self.client.post(reverse("tasks:add"), data, HTTP_HX_REQUEST="true")
+
+    def test_form_in_tile_without_polling(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        self.assertContains(self.client.get(reverse("tasks:tile")), 'aria-label="Neuer Task"')
+        response = self.client.get(reverse("tasks:tile"), {"edit": "neu"})
+        self.assertContains(response, 'name="description"')
+        self.assertContains(response, '<option value="projekt-a">')  # vorhandene Projekte als Vorschlag
+        self.assertNotContains(response, "hx-trigger")
+        self.assertNotContains(response, 'class="tk-list"')
+
+    def test_add_with_all_fields(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.post(description="  Angebot   schreiben ", project="projekt-a", tags="+kunde, buero kunde",
+                             priority="h", due="2026-12-03")
+        self.assertEqual(response.status_code, 200)
+        args = self.added()
+        self.assertEqual(args[args.index("add"):], ["add", "project:projekt-a", "+kunde", "+buero", "priority:H",
+                                                   "due:2026-12-03", "--", "Angebot schreiben"])
+        self.assertIn("rc.verbose=new-id", args)
+        self.assertContains(response, "Angelegt: 7 Angebot schreiben")
+        self.assertContains(response, "hx-trigger")  # zurück in der Liste
+
+    def test_description_stays_text(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        self.post(description="project:x +tag due:today rc.data.location=/tmp")
+        self.assertEqual(self.added()[-2:], ["--", "project:x +tag due:today rc.data.location=/tmp"])
+
+    def test_only_description(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        self.post(description="Nur Text")
+        args = self.added()
+        self.assertEqual(args[args.index("add"):], ["add", "--", "Nur Text"])
+
+    def test_errors_keep_form_and_input(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.post(description=" ", project="zwei worte", tags="a:b", priority="X", due="2026-02-30")
+        for text in ("Beschreibung <em class=\"tk-field-error\">– fehlt", "Projekt <em", "Tags <em",
+                     "Priorität <em", "Fällig <em", 'value="zwei worte"'):
+            self.assertContains(response, text)
+        self.assertEqual(self.added(), [])
+
+    def test_task_error_keeps_form(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        with mock.patch("tasks.taskwarrior.add", side_effect=taskwarrior.TaskError("task add fehlgeschlagen: Nein.")):
+            response = self.post(description="Geht nicht")
+        self.assertContains(response, "Nicht angelegt – task add fehlgeschlagen: Nein.")
+        self.assertContains(response, 'value="Geht nicht"')
+
+    def test_without_htmx_redirects(self):
+        self.fake_task(json.dumps(CLI_EXPORT))
+        response = self.client.post(reverse("tasks:add"), {"description": "Ohne HTMX"})
+        self.assertRedirects(response, "/", fetch_redirect_response=False)
+        self.assertEqual(self.added()[-1], "Ohne HTMX")
+
+    def test_get_not_allowed(self):
+        self.assertEqual(self.client.get(reverse("tasks:add")).status_code, 405)
+
+    def test_validation_in_taskwarrior_module(self):
+        ok = {"description": "x", "project": "", "tags": [], "priority": "", "due": ""}
+        self.assertEqual(taskwarrior.new_task_errors(ok), {})
+        for bad in ({"description": "a\nb"}, {"description": "x" * 301}, {"project": "a b"}, {"tags": ["a b"]},
+                    {"tags": "kunde"}, {"tags": [f"t{i}" for i in range(11)]}, {"priority": "X"}, {"due": "morgen"},
+                    {"due": "2026-13-01"}):
+            with self.subTest(bad=bad):
+                self.assertTrue(taskwarrior.new_task_errors({**ok, **bad}))
+
+
 class ReadOnlyTests(Sandbox):
     def test_db_only_has_no_button_and_refuses(self):
         self.fake_db({U("b"): {"description": "Überfällig", "status": "pending", "due": epoch("2026-11-20T23:00:00")}})
@@ -350,6 +428,10 @@ class ReadOnlyTests(Sandbox):
         self.assertNotContains(response, 'class="tk-check"')
         response = self.client.post(reverse("tasks:done", args=[U("b")]), HTTP_HX_REQUEST="true")
         self.assertContains(response, "Abhaken geht hier nicht")
+        self.assertNotContains(response, "Neuer Task")
+        self.assertNotContains(self.client.get(reverse("tasks:tile"), {"edit": "neu"}), 'name="description"')
+        response = self.client.post(reverse("tasks:add"), {"description": "x"}, HTTP_HX_REQUEST="true")
+        self.assertContains(response, "Anlegen geht hier nicht")
 
 
 class BridgeTests(Sandbox):
@@ -382,6 +464,23 @@ class BridgeTests(Sandbox):
         self.assertEqual(self.modified()[-2:], [U("f"), "done"])
         self.assertContains(response, "Erledigt: Morgen")
 
+    def test_add_through_bridge(self):
+        response = self.client.post(reverse("tasks:add"), {"description": "Über die Brücke – äöü", "tags": "mac"},
+                                    HTTP_HX_REQUEST="true")
+        args = self.added()
+        self.assertEqual(args[args.index("add"):], ["add", "+mac", "--", "Über die Brücke – äöü"])
+        self.assertContains(response, "Angelegt: 7 Über die Brücke – äöü")
+
+    def test_bridge_rejects_bad_new_task(self):
+        key = self.key_file.read_text().strip()
+        body = json.dumps({"description": "x", "project": "a b"}).encode()
+        request = urllib.request.Request(self.url + "/tasks", method="POST", data=body,
+                                         headers={"Authorization": f"Bearer {key}"})
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(caught.exception.code, 502)
+        self.assertEqual(self.added(), [])
+
     def test_key_file_is_private_and_reused(self):
         self.assertEqual(self.key_file.stat().st_mode & 0o777, 0o600)
         self.assertEqual(bridge.create_key(self.key_file), self.key_file.read_text().strip())
@@ -394,7 +493,7 @@ class BridgeTests(Sandbox):
 
     def test_only_known_paths(self):
         key = self.key_file.read_text().strip()
-        for method, path in (("POST", "/tasks"), ("GET", f"/tasks/{U('b')}/snooze"), ("GET", f"/tasks/{U('b')}/done"),
+        for method, path in (("POST", "/tasks/neu"), ("GET", "/tasks/add"), ("GET", f"/tasks/{U('b')}/snooze"), ("GET", f"/tasks/{U('b')}/done"),
                              ("POST", "/tasks/x/delete")):
             request = urllib.request.Request(self.url + path, method=method, data=b"{}" if method == "POST" else None,
                                              headers={"Authorization": f"Bearer {key}"})

@@ -1,9 +1,9 @@
-"""Offene Tasks des lokalen Taskwarrior (Version 3) als Kachel, mit Snooze und Abhaken.
+"""Offene Tasks des lokalen Taskwarrior (Version 3) als Kachel, mit Snooze, Abhaken und Anlegen.
 
 Drei Wege an die Daten, in dieser Reihenfolge (`TASKS_SOURCE = "auto"`):
 
 1. `task export` – wenn das Programm hier läuft (Django direkt auf dem Mac). Genau wie im Terminal,
-   samt Urgency aus der eigenen `.taskrc`. Snooze und Abhaken rufen `task … modify`/`done` direkt auf.
+   samt Urgency aus der eigenen `.taskrc`. Snooze, Abhaken und Anlegen rufen `task … modify`/`done`/`add` direkt auf.
 2. Die Tasks-Brücke (`tasks.bridge`) – für Django im Linux-Container, in dem das Mac-Programm nicht
    läuft. Sie läuft auf dem Mac und ruft dort `task` auf; Ergebnis wie unter 1, Ändern inklusive.
    Gesetzt über `TASKS_BRIDGE_URL` und `TASKS_BRIDGE_KEY_FILE`.
@@ -310,6 +310,37 @@ def complete_task(uuid):
     )
 
 
+def parse_new(data):
+    """Formular → (Felder für `taskwarrior.add`, Fehler je Feld). Tags durch Leerzeichen oder Komma
+    getrennt, ein führendes + ist erlaubt."""
+    description = " ".join(data.get("description", "").split())  # Zeilenumbrüche und Mehrfach-Leerzeichen weg
+    tags = []
+    for tag in data.get("tags", "").replace(",", " ").split():
+        tag = tag.lstrip("+")
+        if tag and tag not in tags:
+            tags.append(tag)
+    fields = {
+        "description": description,
+        "project": data.get("project", "").strip(),
+        "tags": tags,
+        "priority": data.get("priority", "").strip().upper(),
+        "due": data.get("due", "").strip(),
+    }
+    return fields, taskwarrior.new_task_errors(fields)
+
+
+def add_task(fields):
+    """Task anlegen. Gibt (ID oder None, Beschreibung) zurück."""
+    def from_bridge(answer):
+        task_id = answer.get("id")
+        return (task_id if isinstance(task_id, int) else None), str(answer.get("description") or "")
+
+    return _change(
+        lambda command, timeout: taskwarrior.add(command, fields, timeout=timeout),
+        "/tasks", fields, from_bridge,
+    )
+
+
 def can_write(source):
     return source in (SOURCE_CLI, SOURCE_BRIDGE)
 
@@ -361,13 +392,30 @@ def build_item(task, today, days_ahead=DAYS_AHEAD):
 STATUS_LABELS = {"red": "überfällig", "amber": "heute fällig", "green": "nichts fällig", "unknown": "keine Daten"}
 
 
-def get_tile(show_all=False, now=None, flash=""):
+NEW_FIELDS = ("description", "project", "tags", "priority", "due")
+
+
+def _edit_context(tasks, form, errors, message):
+    """Formular „Neuer Task“. `form`: zuletzt eingegebene Werte (nach einem Fehler), sonst leer."""
+    return {
+        "values": form or dict.fromkeys(NEW_FIELDS, ""),
+        "errors": errors or {},
+        "message": message,
+        "projects": sorted({t["project"] for t in tasks if t["project"]}, key=str.casefold),
+        "priorities": [("", "keine"), *PRIORITY_LABELS.items()],
+    }
+
+
+def get_tile(show_all=False, now=None, flash="", edit=False, form=None, errors=None, message=""):
+    """Daten der Kachel. `edit=True` zeigt statt der Liste das Formular „Neuer Task“ (nur wenn Ändern geht);
+    `form`, `errors` und `message` füllen es nach einem fehlgeschlagenen Versuch wieder."""
     now = now or timezone.now()
     today = timezone.localtime(now).date()
     tile = {
         "status": "unknown", "status_label": STATUS_LABELS["unknown"], "summary": "", "error": None,
         "missing": False, "source": "", "items": [], "count_all": 0, "count_soon": 0, "show_all": show_all,
         "days_ahead": _setting("TASKS_DAYS_AHEAD", DAYS_AHEAD), "can_write": False, "note": "", "flash": flash,
+        "edit": None,
         "snooze_days": _setting("TASKS_SNOOZE_DAYS", SNOOZE_DAYS), "poll_seconds": _setting("TASKS_POLL_SECONDS", POLL_SECONDS),
     }
     try:
@@ -402,4 +450,6 @@ def get_tile(show_all=False, now=None, flash=""):
         count_all=len(items),
         count_soon=len(soon),
     )
+    if edit and tile["can_write"]:
+        tile["edit"] = _edit_context(tasks, form, errors, message)
     return tile
