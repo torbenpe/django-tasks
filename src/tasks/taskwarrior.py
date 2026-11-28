@@ -108,3 +108,75 @@ def done(command, uuid, timeout=10):
     task = _pending(command, uuid, timeout)
     _run(command, [uuid, "done"], timeout, "task done")
     return task.get("description", "")
+
+
+# --- Neuer Task ------------------------------------------------------------------------------------
+
+DESCRIPTION_MAX = 300
+PROJECT_MAX = 80
+TAGS_MAX = 10
+PRIORITIES = ("", "H", "M", "L")
+# Bewusst eng: Leerzeichen, Doppelpunkte oder Klammern würde `task` als eigene Argumente oder Filter lesen
+PROJECT_RE = re.compile(r"\w[\w.\-]*")
+TAG_RE = re.compile(r"\w[\w\-]*")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_CREATED_RE = re.compile(r"Created task (\d+)")
+
+
+def new_task_errors(fields):
+    """Fehler je Feld (leer = in Ordnung). `fields`: description, project, tags (Liste), priority, due
+    (JJJJ-MM-TT oder leer). Prüft auch die Brücke, damit sie nur Taskwarrior-taugliche Werte weitergibt."""
+    errors = {}
+    description = fields.get("description")
+    if not isinstance(description, str) or not description.strip():
+        errors["description"] = "fehlt"
+    elif len(description) > DESCRIPTION_MAX or "\n" in description or "\r" in description:
+        errors["description"] = f"eine Zeile, höchstens {DESCRIPTION_MAX} Zeichen"
+    project = fields.get("project") or ""
+    if not isinstance(project, str) or (project and (len(project) > PROJECT_MAX or not PROJECT_RE.fullmatch(project))):
+        errors["project"] = "ungültiges Zeichen"
+    tags = fields.get("tags") or []
+    if not isinstance(tags, list) or not all(isinstance(t, str) and TAG_RE.fullmatch(t) for t in tags):
+        errors["tags"] = "ungültiges Zeichen"
+    elif len(tags) > TAGS_MAX:
+        errors["tags"] = f"höchstens {TAGS_MAX}"
+    if (fields.get("priority") or "") not in PRIORITIES:
+        errors["priority"] = "H, M, L oder keine"
+    due = fields.get("due") or ""
+    if not isinstance(due, str) or (due and not _valid_date(due)):
+        errors["due"] = "kein Datum"
+    return errors
+
+
+def _valid_date(text):
+    if not DATE_RE.fullmatch(text):
+        return False
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def add(command, fields, timeout=10):
+    """Legt einen Task an (`task add`). Gibt (ID oder None, Beschreibung) zurück.
+
+    Die Beschreibung steht hinter `--`: Was darin wie `project:x`, `+tag` oder `due:…` aussieht, bleibt Text.
+    Ein Datum ohne Uhrzeit setzt Taskwarrior auf Mitternacht in der Ortszeit des Macs.
+    """
+    errors = new_task_errors(fields)
+    if errors:
+        key, message = next(iter(errors.items()))
+        raise TaskError(f"ungültige Angabe ({key}: {message})")
+    description = fields["description"].strip()
+    args = ["rc.verbose=new-id", "add"]
+    if fields.get("project"):
+        args.append(f"project:{fields['project']}")
+    args.extend(f"+{tag}" for tag in fields.get("tags") or [])
+    if fields.get("priority"):
+        args.append(f"priority:{fields['priority']}")
+    if fields.get("due"):
+        args.append(f"due:{fields['due']}")
+    out = _run(command, [*args, "--", description], timeout, "task add")
+    match = _CREATED_RE.search(out)
+    return (int(match.group(1)) if match else None), description

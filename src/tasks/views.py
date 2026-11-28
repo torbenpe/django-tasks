@@ -9,16 +9,34 @@ TEMPLATE = "tasks/tile.html"
 
 @require_safe
 def tile(request):
-    context = core.get_tile(show_all=request.GET.get("all") == "1")
+    context = core.get_tile(show_all=request.GET.get("all") == "1", edit=request.GET.get("edit") == "neu")
     return render(request, TEMPLATE, {"tile": context})
 
 
-def _after_post(request, flash):
+def _after_post(request, flash="", **kwargs):
     # Ohne HTMX (kein JavaScript) zurück zur Seite mit der Kachel statt eines nackten Partials
     if request.headers.get("HX-Request") != "true":
         return redirect(getattr(settings, "TASKS_HOME_URL", "/"))
-    context = core.get_tile(show_all=request.POST.get("all") == "1", flash=flash)
+    context = core.get_tile(show_all=request.POST.get("all") == "1", flash=flash, **kwargs)
     return render(request, TEMPLATE, {"tile": context})
+
+
+@require_POST
+def add(request):
+    fields, errors = core.parse_new(request.POST)
+    form = {key: request.POST.get(key, "") for key in core.NEW_FIELDS}
+    if errors:
+        return _after_post(request, edit=True, form=form, errors=errors)
+    try:
+        task_id, description = core.add_task(fields)
+    except core.ReadOnly:
+        flash = "Anlegen geht hier nicht: weder task noch Tasks-Brücke erreichbar."
+    except core.SourceError as exc:
+        # Formular offen lassen, damit die Eingabe nicht verloren geht
+        return _after_post(request, edit=True, form=form, message=f"Nicht angelegt – {exc}")
+    else:
+        flash = f"Angelegt: {f'{task_id} ' if task_id else ''}{description}"
+    return _after_post(request, flash)
 
 
 @require_POST
